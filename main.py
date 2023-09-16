@@ -48,8 +48,7 @@ class Main:
 
     def play(self):
         if self.manual_control:
-            manualControl = ManualControl(self.ego_vehicle, self.world, self.debug)
-            manualControl.play()
+            ManualControl(self.ego_vehicle, self.world, self.debug)
 
 
 if __name__ == "__main__":

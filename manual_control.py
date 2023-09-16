@@ -7,8 +7,9 @@ class ManualControl:
         self.vehicle = vehicle
         self.world = world
         self.debug = debug
-
         self.control = carla.VehicleControl()
+
+        self.play()
 
     def play(self):
         pygame.init()
