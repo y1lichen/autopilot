@@ -1,56 +1,101 @@
 import carla
 import random
+import time
+import numpy as np
+import cv2
 
-from manual_control import ManualControl
+from sensor import Sensors
+from vehicle_motion import VehicleMotion
 
 
-class Main:
-    def __init__(self, manual_control=False, debug=False):
-        self.manual_control = manual_control
+class CarlaEnv:
+    actors_list = []
+    front_cam = None
+    front_depth_cam = None
+    front_seg_cam = None
+    size = (480, 360)
+
+    def __init__(self, debug=False) -> None:
         self.debug = debug
-
         self.client = carla.Client("localhost", 2000)
-        self.world = self.client.get_world()
+        self.client.set_timeout(10)
+        self.world: carla.World = self.client.get_world()
+        self.blueprint_library = self.world.get_blueprint_library()
+        self.golf = self.blueprint_library.filter("golf")[0]
 
-        # world = client.load_world("Town06")
-        weather = carla.WeatherParameters(
-            cloudiness=0.0,
-            precipitation=0.0,
-            sun_altitude_angle=10.0,
-            sun_azimuth_angle=70.0,
-            precipitation_deposits=0.0,
-            wind_intensity=0.0,
-            fog_density=0.0,
-            wetness=0.0,
+    def reset(self):
+        self.actors_list = []
+        self.transform = random.choice(self.world.get_map().get_spawn_points())
+        self.ego_vehicle = self.world.spawn_actor(self.golf, self.transform)
+        self.ego_vehicle_control: VehicleMotion = VehicleMotion(
+            self.ego_vehicle, self.world, self.debug
         )
-        self.world.set_weather(weather)
+        self.actors_list.append(self.ego_vehicle)
+        self.spawn_camera()
 
-        bp_lib = self.world.get_blueprint_library()
-        spawn_points = self.world.get_map().get_spawn_points()
-
-        vehicle_bp = bp_lib.find("vehicle.audi.etron")
-        self.ego_vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_points[79])
-
-        self.spectator = self.world.get_spectator()
-        self.transform = carla.Transform(
-            self.ego_vehicle.get_transform().transform(carla.Location(x=-4, z=2.5)),
-            self.ego_vehicle.get_transform().rotation,
+    def spawn_camera(self):
+        sensors = Sensors(
+            self.blueprint_library, self.transform, self.ego_vehicle, self.size
         )
-        self.spectator.set_transform(self.transform)
+        self.rgb_sensor = self.world.spawn_actor(
+            sensors.rgb_cam, self.transform, attach_to=self.ego_vehicle
+        )
+        self.actors_list.append(self.rgb_sensor)
+        self.rgb_sensor.listen(lambda date: self.process_img(date))
 
-        for _ in range(70):
-            vehicle_bp = random.choice(bp_lib.filter("vehicle"))
-            npc = self.world.try_spawn_actor(vehicle_bp, random.choice(spawn_points))
+        self.seg_sensor = self.world.spawn_actor(
+            sensors.seg_cam, self.transform, attach_to=self.ego_vehicle
+        )
+        self.actors_list.append(self.seg_sensor)
+        self.seg_sensor.listen(lambda date: self.seg_filter(date))
 
-        for v in self.world.get_actors().filter("*vehicle*"):
-            v.set_autopilot(True)
-        self.ego_vehicle.set_autopilot(False)
+        self.depth_sensor = self.world.spawn_actor(
+            sensors.depth_cam, self.transform, attach_to=self.ego_vehicle
+        )
+        self.actors_list.append(self.depth_sensor)
+        self.depth_sensor.listen(lambda data: self.process_depth_img(data))
+        self.ego_vehicle_control.coast()
+        time.sleep(5)
 
-    def play(self):
-        if self.manual_control:
-            ManualControl(self.ego_vehicle, self.world, self.debug)
+    def destroy(self):
+        for act in self.actors_list:
+            act.destroy()
+
+    def process_img(self, image):
+        i = np.array(image.raw_data)
+        i2 = i.reshape((self.size[1], self.size[0], 4))
+        i3 = i2[:, :, :3]
+        if self.debug:
+            cv2.imshow("", i3)
+        self.front_camera = i3
+
+    def seg_filter(self, image):
+        i = np.array(image.raw_data)
+        i2 = i.reshape((self.size[1], self.size[0], 4))
+        i3 = i2[:, :, :3]
+        i3[:, :, 0] = 255 * (i3[:, :, 2] == 6)
+        i3[:, :, 1] = 255 * (i3[:, :, 2] == 7)
+        i3[:, :, 2] = 255 * (i3[:, :, 2] == 10)
+        self.front_seg_camera = i3
+        print(self.front_seg_camera.shape)
+
+    def process_depth_img(self, image):
+        i = np.array(image.raw_data)
+        i2 = i.reshape((self.size[1], self.size[0], 4))
+        i3 = i2[:, :, :3]
+        if self.debug:
+            cv2.imshow("", i3)
+        normalized = (i3[:, :, 2] + i3[:, :, 1] * 256 + i3[:, :, 0] * 256 * 256) / (
+            256 * 256 * 256 - 1
+        )
+        self.front_depth_camera = 255 * normalized
 
 
 if __name__ == "__main__":
-    main = Main(manual_control=True, debug=True)
-    main.play()
+    env = CarlaEnv(debug=True)
+    env.reset()
+    cv2.imshow("", env.front_cam)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+    env.destroy()
