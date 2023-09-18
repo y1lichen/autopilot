@@ -17,21 +17,28 @@ class CarlaEnv:
 
     def __init__(self, debug=False) -> None:
         self.debug = debug
-        self.client = carla.Client("localhost", 2000)
-        self.client.set_timeout(10)
-        self.world: carla.World = self.client.get_world()
+
+        self.world: carla.World = client.get_world()
         self.blueprint_library = self.world.get_blueprint_library()
-        self.golf = self.blueprint_library.filter("golf")[0]
+        self.model3 = self.blueprint_library.filter("vehicle.tesla.model3")[0]
 
     def reset(self):
         self.actors_list = []
         self.transform = random.choice(self.world.get_map().get_spawn_points())
-        self.ego_vehicle = self.world.spawn_actor(self.golf, self.transform)
+        self.ego_vehicle = self.world.spawn_actor(self.model3, self.transform)
         self.ego_vehicle_control: VehicleMotion = VehicleMotion(
             self.ego_vehicle, self.world, self.debug
         )
         self.actors_list.append(self.ego_vehicle)
         self.spawn_camera()
+        time.sleep(5)
+
+        while self.front_camera is None:
+            time.sleep(0.01)
+        while self.front_depth_camera is None:
+            time.sleep(0.01)
+        while self.front_seg_camera is None:
+            time.sleep(0.01)
 
     def spawn_camera(self):
         sensors = Sensors(
@@ -55,7 +62,6 @@ class CarlaEnv:
         self.actors_list.append(self.depth_sensor)
         self.depth_sensor.listen(lambda data: self.process_depth_img(data))
         self.ego_vehicle_control.coast()
-        time.sleep(5)
 
     def destroy(self):
         for act in self.actors_list:
