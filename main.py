@@ -2,6 +2,7 @@ import carla
 import cv2
 import numpy as np
 import math
+from utils.speed_meter import SpeedMeter
 
 from vehicle_motion import VehicleMotion
 
@@ -72,14 +73,13 @@ while True:
         break
     image = camera_data["image"]
 
-    steering_angle = 0  # we do not have it yet
     # to get speed we need to use 'get velocity' function
     v = ego_vehicle.get_velocity()
     # if velocity is a vector in 3d
     # then speed is like hypothenuse in a right triangle
     # and 3.6 is a conversion factor from meters per second to kmh
     # e.g. kmh is 1000 meters and one hour is 60 min with 60 sec = 3600 sec
-    speed = round(3.6 * math.sqrt(v.x**2 + v.y**2 + v.z**2), 0)
+    speed = SpeedMeter.getKMHByVelocity(v)
     # now we add the speed to the window showing a camera mounted on the car
     image = cv2.putText(
         image,

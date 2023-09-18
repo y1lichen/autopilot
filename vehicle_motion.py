@@ -4,6 +4,7 @@ import carla
 class VehicleMotion:
     def __init__(self, vehicle, debug=False):
         self.vehicle: carla.Vehicle = vehicle
+        self.steering_angle = 0
         self.debug = debug
         self.control = carla.VehicleControl()
 
