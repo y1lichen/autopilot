@@ -1,107 +1,105 @@
 import carla
-import random
-import time
-import numpy as np
 import cv2
+import numpy as np
+import math
 
-from sensor import Sensors
 from vehicle_motion import VehicleMotion
 
+client = carla.Client("localhost", 2000)
+world = client.get_world()
+spawn_points = world.get_map().get_spawn_points()
+vehicle_bp = world.get_blueprint_library().filter("*mini*")
+start_point = spawn_points[0]
+ego_vehicle = world.try_spawn_actor(vehicle_bp[0], start_point)
 
-class CarlaEnv:
-    actors_list = []
-    front_cam = None
-    front_depth_cam = None
-    front_seg_cam = None
-    size = (480, 360)
+CAMERA_POS_Z = 3
+CAMERA_POS_X = -5
+SIZE = (640, 360)
 
-    def __init__(self, debug=False) -> None:
-        self.debug = debug
+camera_bp = world.get_blueprint_library().find("sensor.camera.rgb")
+camera_bp.set_attribute("image_size_x", str(SIZE[0]))
+camera_bp.set_attribute("image_size_y", str(SIZE[1]))
 
-        self.world: carla.World = client.get_world()
-        self.blueprint_library = self.world.get_blueprint_library()
-        self.model3 = self.blueprint_library.filter("vehicle.tesla.model3")[0]
-
-    def reset(self):
-        self.actors_list = []
-        self.transform = random.choice(self.world.get_map().get_spawn_points())
-        self.ego_vehicle = self.world.spawn_actor(self.model3, self.transform)
-        self.ego_vehicle_control: VehicleMotion = VehicleMotion(
-            self.ego_vehicle, self.world, self.debug
-        )
-        self.actors_list.append(self.ego_vehicle)
-        self.spawn_camera()
-        time.sleep(5)
-
-        while self.front_camera is None:
-            time.sleep(0.01)
-        while self.front_depth_camera is None:
-            time.sleep(0.01)
-        while self.front_seg_camera is None:
-            time.sleep(0.01)
-
-    def spawn_camera(self):
-        sensors = Sensors(
-            self.blueprint_library, self.transform, self.ego_vehicle, self.size
-        )
-        self.rgb_sensor = self.world.spawn_actor(
-            sensors.rgb_cam, self.transform, attach_to=self.ego_vehicle
-        )
-        self.actors_list.append(self.rgb_sensor)
-        self.rgb_sensor.listen(lambda date: self.process_img(date))
-
-        self.seg_sensor = self.world.spawn_actor(
-            sensors.seg_cam, self.transform, attach_to=self.ego_vehicle
-        )
-        self.actors_list.append(self.seg_sensor)
-        self.seg_sensor.listen(lambda date: self.seg_filter(date))
-
-        self.depth_sensor = self.world.spawn_actor(
-            sensors.depth_cam, self.transform, attach_to=self.ego_vehicle
-        )
-        self.actors_list.append(self.depth_sensor)
-        self.depth_sensor.listen(lambda data: self.process_depth_img(data))
-        self.ego_vehicle_control.coast()
-
-    def destroy(self):
-        for act in self.actors_list:
-            act.destroy()
-
-    def process_img(self, image):
-        i = np.array(image.raw_data)
-        i2 = i.reshape((self.size[1], self.size[0], 4))
-        i3 = i2[:, :, :3]
-        if self.debug:
-            cv2.imshow("", i3)
-        self.front_camera = i3
-
-    def seg_filter(self, image):
-        i = np.array(image.raw_data)
-        i2 = i.reshape((self.size[1], self.size[0], 4))
-        i3 = i2[:, :, :3]
-        i3[:, :, 0] = 255 * (i3[:, :, 2] == 6)
-        i3[:, :, 1] = 255 * (i3[:, :, 2] == 7)
-        i3[:, :, 2] = 255 * (i3[:, :, 2] == 10)
-        self.front_seg_camera = i3
-        print(self.front_seg_camera.shape)
-
-    def process_depth_img(self, image):
-        i = np.array(image.raw_data)
-        i2 = i.reshape((self.size[1], self.size[0], 4))
-        i3 = i2[:, :, :3]
-        if self.debug:
-            cv2.imshow("", i3)
-        normalized = (i3[:, :, 2] + i3[:, :, 1] * 256 + i3[:, :, 0] * 256 * 256) / (
-            256 * 256 * 256 - 1
-        )
-        self.front_depth_camera = 255 * normalized
+camera_init_trans = carla.Transform(carla.Location(z=CAMERA_POS_Z, x=CAMERA_POS_X))
+# this creates the camera in the sim
+camera = world.spawn_actor(camera_bp, camera_init_trans, attach_to=ego_vehicle)
 
 
-if __name__ == "__main__":
-    env = CarlaEnv(debug=True)
-    env.reset()
-    cv2.imshow("", env.front_cam)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+def camera_callback(image, data_dict):
+    data_dict["image"] = np.reshape(
+        np.copy(image.raw_data), (image.height, image.width, 4)
+    )
 
-    env.destroy()
+
+image_w = camera_bp.get_attribute("image_size_x").as_int()
+image_h = camera_bp.get_attribute("image_size_y").as_int()
+
+camera_data = {"image": np.zeros((image_h, image_w, 4))}
+# this actually opens a live stream from the camera
+camera.listen(lambda image: camera_callback(image, camera_data))
+
+PREFERRED_SPEED = 30  # what it says
+SPEED_THRESHOLD = 2  # defines when we get close to desired speed so we drop the
+
+# adding params to display text to image
+font = cv2.FONT_HERSHEY_SIMPLEX
+# org - defining lines to display telemetry values on the screen
+org = (30, 30)  # this line will be used to show current speed
+org2 = (30, 50)  # this line will be used for future steering angle
+org3 = (30, 70)  # and another line for future telemetry outputs
+org4 = (30, 90)  # and another line for future telemetry outputs
+org3 = (30, 110)  # and another line for future telemetry outputs
+fontScale = 0.5
+# white color
+color = (255, 255, 255)
+# Line thickness of 2 px
+thickness = 1
+
+
+#
+cv2.namedWindow("RGB Camera", cv2.WINDOW_AUTOSIZE)
+cv2.imshow("RGB Camera", camera_data["image"])
+
+# main loop
+quit = False
+
+vehicle_motion = VehicleMotion(ego_vehicle, debug=True)
+while True:
+    # Carla Tick
+    world.tick()
+    if cv2.waitKey(1) == ord("q"):
+        quit = True
+        break
+    image = camera_data["image"]
+
+    steering_angle = 0  # we do not have it yet
+    # to get speed we need to use 'get velocity' function
+    v = ego_vehicle.get_velocity()
+    # if velocity is a vector in 3d
+    # then speed is like hypothenuse in a right triangle
+    # and 3.6 is a conversion factor from meters per second to kmh
+    # e.g. kmh is 1000 meters and one hour is 60 min with 60 sec = 3600 sec
+    speed = round(3.6 * math.sqrt(v.x**2 + v.y**2 + v.z**2), 0)
+    # now we add the speed to the window showing a camera mounted on the car
+    image = cv2.putText(
+        image,
+        "Speed: " + str(int(speed)) + " kmh",
+        org2,
+        font,
+        fontScale,
+        color,
+        thickness,
+        cv2.LINE_AA,
+    )
+    # this is where we used the function above to determine accelerator input
+    # from current speed
+    vehicle_motion.cruise_control(speed, preferred_speed=80)
+    cv2.imshow("RGB Camera", image)
+
+# clean up
+cv2.destroyAllWindows()
+camera.stop()
+for actor in world.get_actors().filter("*vehicle*"):
+    actor.destroy()
+for sensor in world.get_actors().filter("*sensor*"):
+    sensor.destroy()
