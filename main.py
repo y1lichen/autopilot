@@ -1,3 +1,4 @@
+import math
 import cv2
 import carla
 import random
@@ -5,6 +6,37 @@ import numpy as np
 
 from utils.speed_meter import SpeedMeter
 from vehicle_motion import VehicleMotion
+
+
+def spawn_vehicles_around_ego_vehicles(
+    world, ego_vehicle, spawn_points, numbers_of_vehicles=100, radius=100
+):
+    np.random.shuffle(spawn_points)
+    ego_location = ego_vehicle.get_location()
+    accessible_points = []
+    for spawn_point in spawn_points:
+        dis = math.sqrt(
+            (ego_location.x - spawn_point.location.x) ** 2
+            + (ego_location.y - spawn_point.location.y) ** 2
+        )
+        if dis < radius:
+            accessible_points.append(spawn_point)
+
+    vehicle_bps = world.get_blueprint_library().filter("*vehicle*")
+
+    if len(accessible_points) < numbers_of_vehicles:
+        numbers_of_vehicles = len(accessible_points)
+
+    for i in range(numbers_of_vehicles):  # generate the free vehicle
+        point = accessible_points[i]
+        vehicle_bp = np.random.choice(vehicle_bps)
+        try:
+            vehicle = world.spawn_actor(vehicle_bp, point)
+            vehicle.set_autopilot(True)
+            print(vehicle)
+        except:
+            print("failed to add vehicle near ego!")
+            pass
 
 
 def main():
@@ -15,7 +47,7 @@ def main():
     # Retrieve the world that is currently running
     world = client.get_world()
     # Change Town map
-    # world = client.load_world('Town01')
+    world = client.load_world("Town04")
 
     # set sync mode
     settings = world.get_settings()
@@ -35,8 +67,10 @@ def main():
 
     # let CarlaViz know this vehicle is the ego vehicle.
     ego_vehicle_bp.set_attribute("role_name", "ego")
-    # spawn the vehicle
     ego_vehicle = world.spawn_actor(ego_vehicle_bp, spawn_point)
+
+    # 加上人機
+    spawn_vehicles_around_ego_vehicles(world, ego_vehicle, spawn_points)
 
     rgb_cam_bp = None
     rgb_cam_bp = world.get_blueprint_library().find("sensor.camera.rgb")
