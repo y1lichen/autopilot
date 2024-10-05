@@ -1,4 +1,13 @@
 {
-	"venv": "carla-test",
-	"venvPath": "c:/users/user/anaconda3/envs",
+	"exclude": [
+		"**/node_modules",
+		"**/__pycache__"
+	],
+	"ignore": [
+		"**/node_modules",
+		"**/__pycache__"
+	],
+	"pythonPath": "/opt/homebrew/Caskroom/miniforge/base/envs/proj/bin/python",
+	"venvPath": "/opt/homebrew/Caskroom/miniforge/base/envs",
+	"venv": "ap"
 }
