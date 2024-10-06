@@ -6,3 +6,5 @@ To install europilot...
 git clone https://github.com/marsauto/europilot.git && cd europilot
 python setup.py install
 ```
+
+The dataset is downloaded from [Euro Truck Simulator 2 Captured Screen and Input](https://www.kaggle.com/datasets/vjekoslavdiklic/ets2sc)
