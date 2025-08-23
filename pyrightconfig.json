@@ -1,0 +1,12 @@
+{
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__"
+  ],
+  "ignore": [
+    "**/node_modules",
+    "**/__pycache__"
+  ],
+  "venvPath": ".",
+  "venv": ".venv"
+}
