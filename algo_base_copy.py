@@ -12,8 +12,8 @@ def region_of_interest(img):
     polygons = np.array([[
         (int(width*0.1), height),
         (int(width*0.8), height),
-        (int(width*0.6), int(height*0.5)),
-        (int(width*0.4), int(height*0.5))
+        (int(width*0.7), int(height*0.5)),
+        (int(width*0.3), int(height*0.5))
     ]])
 
 
