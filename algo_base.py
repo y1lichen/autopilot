@@ -56,6 +56,18 @@ def warp_perspective(frame):
         [int(0.8*width), height]
     ])
 
+    # src = np.float32([
+    #     [int(0.4*width), int(0.5*height)],   # 左上
+    #     [int(0.6*width), int(0.5*height)],   # 右上
+    #     [int(0.9*width), height],            # 右下
+    #     [int(0.1*width), height]             # 左下
+    # ])
+    # dst = np.float32([
+    #     [int(0.2*width), 0],                 # 左上
+    #     [int(0.8*width), 0],                 # 右上
+    #     [int(0.8*width), height],            # 右下
+    #     [int(0.2*width), height]             # 左下
+    # ])
     M = cv2.getPerspectiveTransform(src, dst)
     warped = cv2.warpPerspective(frame, M, (width, height))
     return warped
