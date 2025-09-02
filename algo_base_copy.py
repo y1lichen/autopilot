@@ -1,108 +1,131 @@
 import cv2
 import numpy as np
 import os
-from collections import deque
 
-# 儲存 polyfit 係數 (a, b, c)
-left_history = deque(maxlen=10)
-right_history = deque(maxlen=10)
 
-def region_of_interest(img):
-    height, width = img.shape[:2]
+def preprocess_frame(frame):
+    # gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # 高斯模糊，降低雜訊
+    blurred = cv2.GaussianBlur(frame, (5, 5), 0)
+    
+    # 自適應二值化 (反轉版本，讓線條白、背景黑)
+    binary = cv2.adaptiveThreshold(
+        blurred, 
+        255, 
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,  # 高斯比mean更穩定
+        cv2.THRESH_BINARY_INV,           # INV => 線條白、背景黑
+        15,  # blockSize (奇數, 越大越平滑)
+        7    # C (調高可壓掉背景)
+    )
+
+    # 形態學處理
+    kernel = np.ones((3, 3), np.uint8)
+    
+    # 閉運算 (補上斷掉的線條)
+    closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=3)
+    
+    # 開運算 (去除小的白點)
+    opened = cv2.morphologyEx(closed, cv2.MORPH_OPEN, kernel, iterations=1)
+
+    # 再做一次模糊，讓邊緣更平滑
+    cleaned = cv2.medianBlur(opened, 5)
+
+    return cleaned
+
+# def preprocess_frame(frame):
+#     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+#     # 高斯模糊去掉噪聲
+#     blur = cv2.GaussianBlur(gray, (5,5), 0)
+
+#     # 二值化 (只保留亮的)
+#     _, thresh = cv2.threshold(blur, 200, 255, cv2.THRESH_BINARY)
+
+#     # 形態學操作 -> 把斷斷續續的線連起來
+#     kernel = np.ones((5,5), np.uint8)
+#     mask = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+#     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+
+#     return mask
+
+def region_of_interest(frame):
+    """
+    在原始 BGR 影像上套 ROI (梯形)
+    輸出: 套用遮罩後的 BGR frame
+    """
+    height, width = frame.shape[:2]
+
     polygons = np.array([[
-        (int(width*0.1), height),
-        (int(width*0.8), height),
-        (int(width*0.7), int(height*0.5)),
-        (int(width*0.3), int(height*0.5))
-    ]])
+        (int(0.1*width), height),        # 左下
+        (int(0.9*width), height),        # 右下
+        (int(0.6*width), int(0.5*height)),  # 右上
+        (int(0.4*width), int(0.5*height))   # 左上
+    ]], np.int32)
 
+    mask = np.zeros_like(frame)
+    cv2.fillPoly(mask, polygons, (255,255,255))
+    masked = cv2.bitwise_and(frame, mask)
+    return masked
 
-    mask = np.zeros_like(img)
-    cv2.fillPoly(mask, polygons, 255)
-    return cv2.bitwise_and(img, mask)
+def warp_perspective(frame):
+    """
+    Bird’s Eye View (透視轉換)
+    輸入: BGR 或灰階 frame
+    輸出: 俯瞰圖
+    """
+    height, width = frame.shape[:2]
 
-def fit_poly(points):
-    """ 給定一組 (x, y) 點，回傳二次多項式係數 (a, b, c)，對應 x = a*y^2 + b*y + c """
-    if len(points) < 6:  # 點數太少不擬合
-        return None
-    x = points[:, 0]
-    y = points[:, 1]
-    return np.polyfit(y, x, 2)
+    # src = np.float32([
+    #     [int(0.4*width), int(0.5*height)],  # 左上
+    #     [int(0.1*width), height],           # 左下
+    #     [int(0.6*width), int(0.5*height)],  # 右上
+    #     [int(0.9*width), height]            # 右下
+    # ])
 
-def make_curve_points(image, poly_fit):
-    """ 根據 poly_fit 生成車道曲線點 """
-    if poly_fit is None:
-        return None
-    a, b, c = poly_fit
-    y1 = image.shape[0]   # 底部
-    y2 = int(y1 * 0.6)    # 上方 (可調整)
-    curve = []
-    for y in range(y1, y2, -5):  # 每 5px 取一點
-        x = int(a*y*y + b*y + c)
-        curve.append((x, y))
-    return np.array(curve, dtype=np.int32)
+    # dst = np.float32([
+    #     [0, 0],              # 左上
+    #     [0, height],         # 左下
+    #     [width, 0],          # 右上
+    #     [width, height],     # 右下
+    # ])
 
-def fit_lane_lines(image, lines):
-    """ 從 HoughLinesP 結果分左右線，分別做 polyfit """
-    if lines is None:
-        return None, None
-    left_points, right_points = [], []
-    img_center = image.shape[1] // 2
+    src = np.float32([
+        (int(0.1*width), height),           # 左下
+        (int(0.9*width), height),           # 右下
+        (int(0.6*width), int(0.6*height)),  # 右上
+        (int(0.4*width), int(0.6*height))   # 左上
+    ])
 
-    for line in lines:
-        x1, y1, x2, y2 = line.reshape(4)
-        if x2 - x1 == 0:
-            continue
-        slope = (y2 - y1) / (x2 - x1)
-        # 分左右線：斜率為負 → 左線，斜率為正 → 右線
-        if slope < -0.3 and x1 < img_center and x2 < img_center:
-            left_points.extend([(x1, y1), (x2, y2)])
-        elif slope > 0.3 and x1 > img_center and x2 > img_center:
-            right_points.extend([(x1, y1), (x2, y2)])
+    dst = np.float32([
+        (int(0.2*width), height),           # 左下
+        (int(0.8*width), height),           # 右下
+        (int(0.8*width), 0),                # 右上
+        (int(0.2*width), 0)                 # 左上
+    ])
 
-    left_fit = fit_poly(np.array(left_points)) if left_points else None
-    right_fit = fit_poly(np.array(right_points)) if right_points else None
-    return left_fit, right_fit
+    M = cv2.getPerspectiveTransform(src, dst)
+    warped = cv2.warpPerspective(frame, M, (width, height))
+    return warped
 
-def draw_lane_area(image, left_fit, right_fit):
-    lane_image = np.zeros_like(image)
+def color_threshold(frame):
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    
+    lower_white = np.array([0, 0, 180])
+    upper_white = np.array([180, 50, 255])
+    lower_yellow = np.array([15, 50, 80])
+    upper_yellow = np.array([35, 255, 255])
 
-    left_curve = make_curve_points(image, left_fit)
-    right_curve = make_curve_points(image, right_fit)
+    white_mask = cv2.inRange(hsv, lower_white, upper_white)
+    yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
 
-    if left_curve is not None:
-        cv2.polylines(lane_image, [left_curve], False, (255, 0, 255), 6)
-    if right_curve is not None:
-        cv2.polylines(lane_image, [right_curve], False, (255, 0, 255), 6)
+    combined_mask = cv2.bitwise_or(white_mask, yellow_mask)
+    return combined_mask
+# ================================
+# Main
+# ================================
 
-    if left_curve is not None and right_curve is not None:
-        # 建立封閉多邊形，塗滿 lane 區域
-        pts = np.vstack([left_curve, right_curve[::-1]])
-        cv2.fillPoly(lane_image, [pts], (0, 255, 0))
-
-    return lane_image
-
-def estimate_turn(left_fit, right_fit, image):
-    """ 根據 polyfit 判斷方向 """
-    if left_fit is None or right_fit is None:
-        return "Detecting..."
-
-    y_eval = int(image.shape[0] * 0.7)  # 評估點 (畫面下方 70%)
-    left_x = left_fit[0]*y_eval**2 + left_fit[1]*y_eval + left_fit[2]
-    right_x = right_fit[0]*y_eval**2 + right_fit[1]*y_eval + right_fit[2]
-    mid = (left_x + right_x) / 2
-    center = image.shape[1] / 2
-
-    offset = mid - center
-    if abs(offset) < 30:
-        return "Straight"
-    elif offset < 0:
-        return "Turning Left"
-    else:
-        return "Turning Right"
-
-# ==== 改這裡：讀取 run_* 的 frames ====
-frames_dir = "dataset/run_1756133797/frames"   # 修改成你的 run_* 資料夾
+frames_dir = "dataset/run_1756133797/frames"
 frame_files = sorted(
     [f for f in os.listdir(frames_dir) if f.endswith(".jpg") or f.endswith(".png")]
 )
@@ -110,74 +133,38 @@ frame_files = sorted(
 if not frame_files:
     raise RuntimeError(f"No frames found in {frames_dir}")
 
-# 讀第一張確定大小
 first_frame = cv2.imread(os.path.join(frames_dir, frame_files[0]))
 height, width = first_frame.shape[:2]
 height = int(height * 2 / 3)
-# 設定輸出影片
+
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-out = cv2.VideoWriter("output_lane_from_frames.mp4", fourcc, 20.0, (width, height))
+out = cv2.VideoWriter("output_bird_eye.mp4", fourcc, 20.0, (width, height))
 
 for fname in frame_files:
     frame = cv2.imread(os.path.join(frames_dir, fname))
     if frame is None:
         continue
-    frame = frame[: height,:]
+    frame = frame[:height,:]
 
-    # --- 車道檢測流程 ---
-    hls = cv2.cvtColor(frame, cv2.COLOR_BGR2HLS)
-    white = cv2.inRange(hls, np.array([0, 200, 0]), np.array([255, 255, 255]))
-    yellow = cv2.inRange(hls, np.array([15, 30, 115]), np.array([35, 204, 255]))
-    mask = cv2.bitwise_or(white, yellow)
-    masked = cv2.bitwise_and(frame, frame, mask=mask)
+    # Step 1: ROI
+    # roi = region_of_interest(frame)
 
-    gray = cv2.cvtColor(masked, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges = cv2.Canny(blur, 30, 120)
-    cropped = region_of_interest(edges)
+    # Step 1: Bird’s Eye View
+    bird_eye = warp_perspective(frame)
 
-    lines = cv2.HoughLinesP(
-        cropped,
-        2,
-        np.pi / 180,
-        100,
-        minLineLength=40,
-        maxLineGap=150)
+    # Step 2: 顏色篩選 (白色 + 黃色)
+    thresholded = color_threshold(bird_eye)
 
-    left_fit, right_fit = fit_lane_lines(frame, lines)
-
-    # 更新歷史 (儲存 polyfit 係數)
-    if left_fit is not None:
-        left_history.append(left_fit)
-    if right_fit is not None:
-        right_history.append(right_fit)
-
-    # 平滑處理 (取平均 polyfit 係數)
-    left_avg = np.mean(left_history, axis=0) if left_history else None
-    right_avg = np.mean(right_history, axis=0) if right_history else None
-
-    overlay = draw_lane_area(frame, left_avg, right_avg)
-    output = cv2.addWeighted(frame, 0.8, overlay, 1, 1)
-
-    direction = estimate_turn(left_avg, right_avg, frame)
-    cv2.putText(output, direction, (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 255), 4)
-
-    # --- ROI 遮罩 (可選) ---
-    roi_mask_color = np.zeros_like(output)
-    polygons = np.array([[
-        (int(width*0.1), height),
-        (int(width*0.8), height),
-        (int(width*0.7), int(height*0.5)),
-        (int(width*0.3), int(height*0.5))
-    ]])
+    # Step 3: Preprocess (Canny)
+    edges = preprocess_frame(thresholded)
 
 
+    # 因為 VideoWriter 需要 3 channel，把灰階轉回 BGR
+    output = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
 
-    cv2.fillPoly(roi_mask_color, polygons, (255, 255, 255))
-    output_roi_only = cv2.bitwise_and(output, roi_mask_color)
-    
-    out.write(output_roi_only)
-    cv2.imshow("ADAS Lane Detection from Frames", output_roi_only)
+    # 顯示並儲存
+    cv2.imshow("ADAS Lane Detection with Bird Eye", output)
+    out.write(output)
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
