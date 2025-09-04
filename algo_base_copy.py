@@ -11,7 +11,7 @@ class LaneDetector:
     def __init__(self):
         self.left_fit = None
         self.right_fit = None
-        self.smooth_factor = 0.8  # 平滑因子，值越低，平滑效果越強
+        self.smooth_factor = 0.5
 
     def get_smoothed_lanes(self, new_left_fit, new_right_fit):
         # 對左右車道線的擬合係數進行平滑化
@@ -32,36 +32,49 @@ class LaneDetector:
 
 def preprocess_frame(frame):
     """
-    使用自適應二值化和形態學處理來準備影像。
+    使用顏色和梯度二值化來準備影像，使其更穩健。
     輸入: 影像 (BGR)
     輸出: 二值化影像 (8-bit 灰階)
     """
+    # 轉換到 HLS 色彩空間
+    hls = cv2.cvtColor(frame, cv2.COLOR_BGR2HLS)
+    h_channel = hls[:, :, 0]
+    l_channel = hls[:, :, 1]
+    s_channel = hls[:, :, 2]
+
+    # 針對白色線條的顏色二值化
+    # 降低亮度門檻值，以偵測較暗或褪色的白色線條
+    white_thresh_low = 180
+    white_binary = np.zeros_like(l_channel)
+    white_binary[(l_channel > white_thresh_low)] = 255
+
+    # 針對黃色線條的顏色二值化
+    yellow_thresh_low_h = 20
+    yellow_thresh_high_h = 30
+    yellow_thresh_low_s = 100
+    yellow_thresh_low_l = 80
+    yellow_binary = np.zeros_like(h_channel)
+    yellow_binary[((h_channel >= yellow_thresh_low_h) & (h_channel <= yellow_thresh_high_h)) &
+                   (s_channel >= yellow_thresh_low_s) & (l_channel >= yellow_thresh_low_l)] = 255
+
+    # 結合兩種顏色二值化結果
+    color_binary = cv2.bitwise_or(white_binary, yellow_binary)
+
+    # 梯度二值化 (Sobel)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0)
+    abs_sobelx = np.absolute(sobelx)
+    scaled_sobel = np.uint8(255 * abs_sobelx / np.max(abs_sobelx))
+    sx_binary = np.zeros_like(scaled_sobel)
+    sx_binary[(scaled_sobel >= 20) & (scaled_sobel <= 100)] = 255
     
-    # 高斯模糊，降低雜訊
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    
-    # 自適應二值化 (反轉版本，讓線條白、背景黑)
-    binary = cv2.adaptiveThreshold(
-        blurred, 
-        255, 
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV,
-        15,
-        7  
-    )
+    # 結合顏色和梯度二值化
+    combined_binary = cv2.bitwise_or(color_binary, sx_binary)
 
-    # 形態學處理
+    # 形態學處理 (可選，但有助於平滑結果)
     kernel = np.ones((3, 3), np.uint8)
-    
-    # 閉運算 (補上斷掉的線條)
-    closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=3)
-    
-    # 開運算 (去除小的白點)
-    opened = cv2.morphologyEx(closed, cv2.MORPH_OPEN, kernel, iterations=1)
-
-    # 再做一次模糊，讓邊緣更平滑
-    cleaned = cv2.medianBlur(opened, 5)
+    closed = cv2.morphologyEx(combined_binary, cv2.MORPH_CLOSE, kernel, iterations=1)
+    cleaned = cv2.medianBlur(closed, 5)
 
     return cleaned
 
@@ -105,7 +118,7 @@ def find_lane_fits(binary_frame, detector):
     nwindows = 9
     window_height = int(height / nwindows)
     margin = 50
-    minpix = 50
+    minpix = 50  # 降低 minpix 值以更好地偵測虛線
     
     new_left_fit = None
     new_right_fit = None
@@ -218,22 +231,22 @@ def find_lane_fits(binary_frame, detector):
 
 def draw_lanes_on_images(bird_eye, binary_bird_eye, smoothed_left_fit, smoothed_right_fit):
     """
-    在二值化鳥瞰圖上繪製車道線。
+    在二值化鳥瞰圖上繪製車道線和ROI。
     輸入: 二值化影像、平滑化後的擬合係數。
-    輸出: 一個包含車道線的彩色二值化影像。
+    輸出: 一個包含車道線和ROI的彩色二值化影像。
     """
     height, width = bird_eye.shape[:2]
     
     # 將二值化鳥瞰圖轉換為三通道彩色影像
-    # 這樣我們才能在上面繪製彩色的車道線
+    # 這樣我們才能在上面繪製彩色的車道線和ROI
     result_image = cv2.cvtColor(binary_bird_eye, cv2.COLOR_GRAY2BGR)
-
+    
     if smoothed_left_fit is not None and smoothed_right_fit is not None:
         ploty = np.linspace(0, height - 1, height)
         left_fitx = smoothed_left_fit[0] * ploty**2 + smoothed_left_fit[1] * ploty + smoothed_left_fit[2]
         right_fitx = smoothed_right_fit[0] * ploty**2 + smoothed_right_fit[1] * ploty + smoothed_right_fit[2]
         
-        # 創建車道線的多邊形點，這次不閉合
+        # 創建車道線的多邊形點
         pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))], np.int32)
         pts_right = np.array([np.transpose(np.vstack([right_fitx, ploty]))], np.int32)
 
