@@ -3,41 +3,19 @@ import numpy as np
 import os
 from collections import deque
 
-class LaneDetector:
-    """
-    用於平滑車道線偵測結果的類別。
-    它會儲存並平均多幀的車道線數據，以減少抖動。
-    """
-    def __init__(self):
-        self.left_fit = None
-        self.right_fit = None
-        self.smooth_factor = 0.5 # 平滑化因子，值越小越平滑
-
-    def get_smoothed_lanes(self, new_left_fit, new_right_fit):
-        """
-        對左右車道線的擬合係數進行平滑化處理。
-        """
-        # 如果是第一次偵測，直接賦值
-        if self.left_fit is None and new_left_fit is not None:
-            self.left_fit = new_left_fit
-        # 否則，進行加權平均
-        elif new_left_fit is not None:
-            self.left_fit = (self.left_fit * self.smooth_factor) + (new_left_fit * (1 - self.smooth_factor))
-
-        if self.right_fit is None and new_right_fit is not None:
-            self.right_fit = new_right_fit
-        elif new_right_fit is not None:
-            self.right_fit = (self.right_fit * self.smooth_factor) + (new_right_fit * (1 - self.smooth_factor))
-        
-        return self.left_fit, self.right_fit
-
+# 參數設定
+# Parameter Configuration
+# ✅ 調整此處的 maxlen 數值以控制反應速度。數值越小，反應越快，但可能抖動會增加。
+# 佇列現在儲存的是多項式係數
+left_history = deque(maxlen=5) 
+right_history = deque(maxlen=5)
 
 # 參數化 Bird's Eye View 的來源點，方便手動調校
 # These points are relative to the image dimensions (width, height).
 # These are the corners of the trapezoid ROI in the original image.
 BEV_SRC_POINTS_REL = np.float32([
-    [0.4, 0.95],
-    [0.65, 0.95],
+    [0.25, 0.95],
+    [0.75, 0.95],
     [0.6, 0.55],
     [0.4, 0.55]
 ])
@@ -101,146 +79,138 @@ def get_perspective_transforms(frame):
     Minv = cv2.getPerspectiveTransform(dst, src)
     return M, Minv
 
-# 🧠 2. 智能化車道線擬合流程
-def find_lane_fits(binary_frame, detector):
+# 🧠 2. 智能化車道線擬合流程 - 滑動視窗演算法
+def find_lane_pixels_and_fit_poly(binary_warped):
     """
-    使用多項式擬合找到車道線的擬合係數。
-    輸入: 預處理過的二值化影像，LaneDetector 實例
-    輸出: 左右車道線的擬合係數
+    使用滑動視窗演算法在二值化鳥瞰圖上尋找車道線像素，並擬合多項式曲線。
     """
-    height, width = binary_frame.shape[:2]
+    # 計算直方圖以找到車道線的底部起點
+    histogram = np.sum(binary_warped[binary_warped.shape[0]//2:,:], axis=0)
     
-    nonzero = binary_frame.nonzero()
+    midpoint = np.int32(histogram.shape[0]//2)
+    leftx_base = np.argmax(histogram[:midpoint])
+    rightx_base = np.argmax(histogram[midpoint:]) + midpoint
+
+    # 滑動視窗設定
+    nwindows = 9
+    window_height = np.int32(binary_warped.shape[0]//nwindows)
+    nonzero = binary_warped.nonzero()
     nonzeroy = np.array(nonzero[0])
     nonzerox = np.array(nonzero[1])
     
-    nwindows = 9
-    window_height = int(height / nwindows)
-    margin = 50
-    minpix = 50  # 降低 minpix 值以更好地偵測虛線
+    leftx_current = leftx_base
+    rightx_current = rightx_base
     
-    new_left_fit = None
-    new_right_fit = None
+    margin = 100
+    minpix = 50
+    
+    left_lane_inds = []
+    right_lane_inds = []
 
-    if detector.left_fit is not None and detector.right_fit is not None:
-        # 如果有歷史資料，只在先前偵測的車道線附近尋找，反應會更快
-        left_lane_inds = ((nonzerox > (detector.left_fit[0]*(nonzeroy**2) + detector.left_fit[1]*nonzeroy + detector.left_fit[2] - margin)) & 
-                          (nonzerox < (detector.left_fit[0]*(nonzeroy**2) + detector.left_fit[1]*nonzeroy + detector.left_fit[2] + margin)))
-        right_lane_inds = ((nonzerox > (detector.right_fit[0]*(nonzeroy**2) + detector.right_fit[1]*nonzeroy + detector.right_fit[2] - margin)) & 
-                           (nonzerox < (detector.right_fit[0]*(nonzeroy**2) + detector.right_fit[1]*nonzeroy + detector.right_fit[2] + margin)))
-    else:
-        # 第一次偵測或歷史資料遺失時，使用直方圖分析尋找起點
-        histogram = np.sum(binary_frame[int(height * 0.75):, :], axis=0)
-        midpoint = int(histogram.shape[0] / 2)
-        leftx_base = np.argmax(histogram[:midpoint])
-        rightx_base = np.argmax(histogram[midpoint:]) + midpoint
+    # 遍歷所有滑動視窗
+    for window in range(nwindows):
+        win_y_low = binary_warped.shape[0] - (window+1)*window_height
+        win_y_high = binary_warped.shape[0] - window*window_height
+        win_x_low_l = leftx_current - margin
+        win_x_high_l = leftx_current + margin
+        win_x_low_r = rightx_current - margin
+        win_x_high_r = rightx_current + margin
+        
+        # 識別視窗內的非零像素
+        good_left_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & 
+                          (nonzerox >= win_x_low_l) & (nonzerox < win_x_high_l)).nonzero()[0]
+        good_right_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & 
+                           (nonzerox >= win_x_low_r) & (nonzerox < win_x_high_r)).nonzero()[0]
+        
+        left_lane_inds.append(good_left_inds)
+        right_lane_inds.append(good_right_inds)
+        
+        # 如果找到足夠多的像素，更新下一個視窗的中心位置
+        if len(good_left_inds) > minpix:
+            leftx_current = np.int32(np.mean(nonzerox[good_left_inds]))
+        if len(good_right_inds) > minpix:        
+            rightx_current = np.int32(np.mean(nonzerox[good_right_inds]))
 
-        left_lane_inds = []
-        right_lane_inds = []
-        leftx_current = leftx_base
-        rightx_current = rightx_base
-
-        for window in range(nwindows):
-            win_y_low = height - (window + 1) * window_height
-            win_y_high = height - window * window_height
-            win_x_left_low = leftx_current - margin
-            win_x_left_high = leftx_current + margin
-            win_x_right_low = rightx_current - margin
-            win_x_right_high = rightx_current + margin
-
-            good_left_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & 
-                              (nonzerox >= win_x_left_low) & (nonzerox < win_x_left_high)).nonzero()[0]
-            good_right_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & 
-                               (nonzerox >= win_x_right_low) & (nonzerox < win_x_right_high)).nonzero()[0]
-            
-            left_lane_inds.append(good_left_inds)
-            right_lane_inds.append(good_right_inds)
-            
-            if len(good_left_inds) > minpix:
-                leftx_current = int(np.mean(nonzerox[good_left_inds]))
-            if len(good_right_inds) > minpix:
-                rightx_current = int(np.mean(nonzerox[good_right_inds]))
-
+    # 將所有像素索引串連起來
+    try:
         left_lane_inds = np.concatenate(left_lane_inds)
         right_lane_inds = np.concatenate(right_lane_inds)
+    except ValueError:
+        pass
     
+    # 提取車道線像素的座標
     leftx = nonzerox[left_lane_inds]
     lefty = nonzeroy[left_lane_inds] 
     rightx = nonzerox[right_lane_inds]
     righty = nonzeroy[right_lane_inds]
     
-    # 設定高斯分佈的參數
-    # The standard deviation controls how fast the weight drops off.
-    # A smaller value means a narrower bell curve (more focus on the center).
-    sigma = width / 6
-    center_x = width / 2
+    left_fit = None
+    right_fit = None
     
-    if len(leftx) > minpix:
-        # 計算左側車道線點的高斯權重
-        left_weights = np.exp(-((leftx - center_x)**2) / (2 * sigma**2))
-        new_left_fit = np.polyfit(lefty, leftx, 2, w=left_weights)
+    # 使用高斯權重進行多項式擬合
+    # Fit a second order polynomial to the left and right lane points with Gaussian weighting
+    if len(leftx) > 0:
+        # 計算左車道線點的平均 x 位置作為中心
+        left_mean_x = np.mean(leftx)
+        # 設定標準差
+        sigma = 30
+        # 計算高斯權重
+        left_weights = np.exp(-((leftx - left_mean_x)**2) / (2 * sigma**2))
+        try:
+            left_fit = np.polyfit(lefty, leftx, 2, w=left_weights)
+        except TypeError:
+            left_fit = None
 
-    if len(rightx) > minpix:
-        # 計算右側車道線點的高斯權重
-        right_weights = np.exp(-((rightx - center_x)**2) / (2 * sigma**2))
-        new_right_fit = np.polyfit(righty, rightx, 2, w=right_weights)
-    
-    return new_left_fit, new_right_fit
+    if len(rightx) > 0:
+        # 計算右車道線點的平均 x 位置作為中心
+        right_mean_x = np.mean(rightx)
+        # 設定標準差
+        sigma = 30
+        # 計算高斯權重
+        right_weights = np.exp(-((rightx - right_mean_x)**2) / (2 * sigma**2))
+        try:
+            right_fit = np.polyfit(righty, rightx, 2, w=right_weights)
+        except TypeError:
+            right_fit = None
 
+    return left_fit, right_fit
 
-def draw_lanes_on_images(base_image, smoothed_left_fit, smoothed_right_fit):
-    """
-    在基礎影像上繪製車道線和區域。
-    輸入: 基礎影像 (彩色或三通道二值化)、平滑化後的擬合係數。
-    輸出: 包含車道線和區域的影像。
-    """
-    height, width = base_image.shape[:2]
-    
-    # 創建一個空白影像用於繪製
-    lane_image = np.zeros_like(base_image)
+def draw_lane_area(image, left_fit, right_fit):
+    lane_image = np.zeros_like(image)
+    if left_fit is None or right_fit is None:
+        return lane_image
 
-    if smoothed_left_fit is not None and smoothed_right_fit is not None:
-        ploty = np.linspace(0, height - 1, height)
-        left_fitx = smoothed_left_fit[0] * ploty**2 + smoothed_left_fit[1] * ploty + smoothed_left_fit[2]
-        right_fitx = smoothed_right_fit[0] * ploty**2 + smoothed_right_fit[1] * ploty + smoothed_right_fit[2]
-        
-        # 創建車道線的多邊形點
-        pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))], np.int32)
-        pts_right = np.array([np.transpose(np.vstack([right_fitx, ploty]))], np.int32)
+    ploty = np.linspace(0, image.shape[0]-1, image.shape[0])
+    left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]
+    right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
 
-        # 繪製車道線區域
-        pts = np.hstack((pts_left, pts_right[:, ::-1]))
-        cv2.fillPoly(lane_image, pts, (0, 255, 0))
+    # 將擬合的多項式點轉換為繪圖用的多邊形
+    left_line_pts = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
+    right_line_pts = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])
+    pts = np.hstack((left_line_pts, right_line_pts))
 
-        # 在影像上繪製車道線 (綠色)
-        cv2.polylines(lane_image, [pts_left], False, (255, 0, 255), 20)
-        cv2.polylines(lane_image, [pts_right], False, (255, 0, 255), 20)
-    
-    # 將繪製的車道線區域與基礎影像合併
-    result = cv2.addWeighted(base_image, 1, lane_image, 0.5, 0)
-    return result
+    cv2.fillPoly(lane_image, np.int32(pts), (0, 255, 0))
+    cv2.polylines(lane_image, np.int32([left_line_pts]), False, (255, 0, 255), 6)
+    cv2.polylines(lane_image, np.int32([right_line_pts]), False, (255, 0, 255), 6)
+    return lane_image
 
-def estimate_turn(left, right):
-    if left is None or right is None:
+def estimate_turn(left_fit, right_fit):
+    if left_fit is None or right_fit is None:
         return "Detecting..."
-    # 根據多項式係數估計曲率
-    # 這是基於多項式二階導數的曲率計算
-    left_curverad = ((1 + (2 * left[0] * 720 + left[1])**2)**1.5) / np.absolute(2 * left[0])
-    right_curverad = ((1 + (2 * right[0] * 720 + right[1])**2)**1.5) / np.absolute(2 * right[0])
-    avg_curverad = (left_curverad + right_curverad) / 2
     
-    # 判斷轉向
-    if avg_curverad > 2000:
+    y_eval = 472
+    left_x = left_fit[0]*y_eval**2 + left_fit[1]*y_eval + left_fit[2]
+    right_x = right_fit[0]*y_eval**2 + right_fit[1]*y_eval + right_fit[2]
+
+    delta = right_x - left_x - 300 # 假設的平均車道寬度為300像素
+    if abs(delta) < 50:
         return "Straight"
-    elif left[0] < 0:
+    elif delta < 0:
         return "Turning Right"
     else:
         return "Turning Left"
 
-
-# ================================
-# Main
-# ================================
+# ==== Main Loop ====
 frames_dir = "dataset/run_1756133797/frames"
 frame_files = sorted(
     [f for f in os.listdir(frames_dir) if f.endswith(".jpg") or f.endswith(".png")]
@@ -258,8 +228,7 @@ crop_height = int(height * (1 - CROP_BOTTOM_PERCENTAGE))
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter("output_bird_eye_view.mp4", fourcc, 20.0, (width, crop_height))
 
-# 建立車道線偵測器實例
-detector = LaneDetector()
+# 重新計算透視變換矩陣，使用裁切後的高度
 M, Minv = get_perspective_transforms(first_frame[:crop_height, :])
 
 for fname in frame_files:
@@ -268,7 +237,6 @@ for fname in frame_files:
         continue
     
     # 根據 CROP_BOTTOM_PERCENTAGE 裁切畫面
-    # Crop the frame based on the CROP_BOTTOM_PERCENTAGE
     frame = frame[:crop_height, :]
 
     # --- 車道線偵測流程 ---
@@ -279,26 +247,36 @@ for fname in frame_files:
     bird_eye_color = cv2.warpPerspective(frame, M, (width, crop_height))
     bird_eye_edges = cv2.warpPerspective(combined_mask, M, (width, crop_height))
 
-    # 使用多項式擬合來尋找車道線
-    new_left_fit, new_right_fit = find_lane_fits(bird_eye_edges, detector)
-    
-    # 平滑化車道線的擬合係數
-    smoothed_left_fit, smoothed_right_fit = detector.get_smoothed_lanes(new_left_fit, new_right_fit)
+    # 使用滑動視窗在鳥瞰圖上尋找車道線並擬合多項式
+    left_fit_poly, right_fit_poly = find_lane_pixels_and_fit_poly(bird_eye_edges)
+
+    # 📉 3. 資料平滑與去雜訊處理
+    # ✅ 時間平滑：使用過往帧資料
+    # 將當前偵測結果（多項式係數）加入歷史隊列
+    if left_fit_poly is not None:
+        left_history.append(left_fit_poly)
+    if right_fit_poly is not None:
+        right_history.append(right_fit_poly)
+
+    # 透過歷史資料計算平均多項式係數
+    avg_left_fit = np.average(list(left_history), axis=0) if left_history else None
+    avg_right_fit = np.average(list(right_history), axis=0) if right_history else None
 
     # 將二值化鳥瞰圖轉換為三通道，以便在其上繪製彩色車道線
     bird_eye_edges_3ch = cv2.cvtColor(bird_eye_edges, cv2.COLOR_GRAY2BGR)
 
-    # 在三通道二值化圖上繪製車道線和填充區域
-    final_output = draw_lanes_on_images(bird_eye_edges_3ch, smoothed_left_fit, smoothed_right_fit)
+    # 在彩色的鳥瞰圖上繪製車道線和填充區域
+    overlay = draw_lane_area(bird_eye_edges_3ch, avg_left_fit, avg_right_fit)
+    output = cv2.addWeighted(bird_eye_edges_3ch, 1, overlay, 1, 1)
 
     # 估計轉向並在鳥瞰圖上顯示
-    direction = estimate_turn(smoothed_left_fit, smoothed_right_fit)
-    cv2.putText(final_output, direction, (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 255), 4)
+    direction = estimate_turn(avg_left_fit, avg_right_fit)
+    cv2.putText(output, direction, (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 255), 4)
 
-    out.write(final_output)
+    out.write(output)
     cv2.namedWindow("ADAS Lane Detection - Bird's Eye View", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("ADAS Lane Detection - Bird's Eye View", 960, 540)
-    cv2.imshow("ADAS Lane Detection - Bird's Eye View", final_output)
+    cv2.imshow("ADAS Lane Detection - Bird's Eye View", output)
     
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
