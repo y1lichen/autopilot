@@ -47,12 +47,16 @@ def preprocess_frame(frame):
 def apply_bird_eye_view(frame):
     height, width = frame.shape[:2]
     src = np.float32([
-        [width * 0.15, height * 0.6], [width * 0.5, height * 0.6],
-        [width * 0.65, height * 1.0], [0, height * 1.0]
+        [width * 0.1, height * 0.65],
+        [width * 0.5, height * 0.65],
+        [width * 0.65, height * 1.0],
+        [0, height * 1.0]
     ])
     dst = np.float32([
-        [width * 0.1, 0], [width * 0.95, 0],
-        [width * 0.95, height], [width * 0.1, height]
+        [width * 0.1, 0],
+        [width * 0.95, 0],
+        [width * 0.95, height],
+        [width * 0.1, height]
     ])
     M = cv2.getPerspectiveTransform(src, dst)
     bird_eye = cv2.warpPerspective(frame, M, (width, height))
