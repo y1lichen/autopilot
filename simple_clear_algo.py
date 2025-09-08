@@ -6,8 +6,10 @@ import os
 CROP_BOTTOM_PERCENTAGE = 0.35
 CROP_LEFT_PERCENTAGE = 0.35
 CROP_RIGHT_PERCENTAGE = 0.1
+WINDOW_WIDTH = 100
+WINDOW_HEIGHT = 40
 
-# ====== 前處理：顏色 + 梯度 ======
+# ====== 前處理 ======
 def preprocess_frame(frame):
     hls = cv2.cvtColor(frame, cv2.COLOR_BGR2HLS)
     white_mask = cv2.inRange(hls, np.array([0, 200, 0]), np.array([255, 255, 255]))
@@ -27,44 +29,89 @@ def preprocess_frame(frame):
 
     combined_mask = cv2.bitwise_or(color_mask, sobel_mask)
     combined_mask = cv2.bitwise_or(combined_mask, light_mask)
-    return combined_mask
 
-# ====== 套用 ROI 並轉換為 Bird's Eye View ======
+    kernel = np.ones((3, 3), np.uint8)
+    combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
+
+    # 過濾小區域
+    contours, _ = cv2.findContours(combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    min_area = 50
+    mask_filtered = np.zeros_like(combined_mask)
+    for cnt in contours:
+        if cv2.contourArea(cnt) >= min_area:
+            cv2.drawContours(mask_filtered, [cnt], -1, 255, -1)
+
+    return mask_filtered
+
+# ====== Bird's Eye View ======
 def apply_bird_eye_view(frame):
     height, width = frame.shape[:2]
-
-    # 定義來源點 (梯形 ROI)
     src = np.float32([
-        [width * 0.15, height * 0.6],   # 左上
-        [width * 0.5, height * 0.6],   # 右上
-        [width * 0.65,  height * 1.0],   # 右下
-        [width * 0.0,  height * 1.0]    # 左下
+        [width * 0.15, height * 0.6], [width * 0.5, height * 0.6],
+        [width * 0.65, height * 1.0], [0, height * 1.0]
     ])
-
-    # 定義目標點 (轉換成矩形)
     dst = np.float32([
-        [width * 0.1, 0],
-        [width * 0.95, 0],
-        [width * 0.95, height],
-        [width * 0.1, height]
+        [width * 0.1, 0], [width * 0.95, 0],
+        [width * 0.95, height], [width * 0.1, height]
     ])
-
-    # 計算透視變換矩陣
     M = cv2.getPerspectiveTransform(src, dst)
-
-    # 應用透視變換
     bird_eye = cv2.warpPerspective(frame, M, (width, height))
-
     return bird_eye, src, dst
+
+# ====== 滑動窗口追蹤車道線 Function ======
+def sliding_window_lane_detection(binary_warped, prevLx=[], prevRx=[]):
+    histogram = np.sum(binary_warped[binary_warped.shape[0]//2:, :], axis=0)
+    midpoint = histogram.shape[0] // 2
+    left_base = np.argmax(histogram[:midpoint])
+    right_base = np.argmax(histogram[midpoint:]) + midpoint
+
+    lx, rx = [], []
+    y = binary_warped.shape[0]
+    mask_copy = binary_warped.copy()
+
+    while y > 0:
+        # 左邊
+        x_start = max(left_base - WINDOW_WIDTH//2, 0)
+        x_end = min(left_base + WINDOW_WIDTH//2, binary_warped.shape[1])
+        window_left = binary_warped[y-WINDOW_HEIGHT:y, x_start:x_end]
+        contours, _ = cv2.findContours(window_left, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in contours:
+            M = cv2.moments(cnt)
+            if M["m00"] != 0:
+                cx = int(M["m10"]/M["m00"])
+                left_base = x_start + cx
+                lx.append(left_base)
+        cv2.rectangle(mask_copy, (x_start, y), (x_end, y-WINDOW_HEIGHT), 255, 2)
+
+        # 右邊
+        x_start = max(right_base - WINDOW_WIDTH//2, 0)
+        x_end = min(right_base + WINDOW_WIDTH//2, binary_warped.shape[1])
+        window_right = binary_warped[y-WINDOW_HEIGHT:y, x_start:x_end]
+        contours, _ = cv2.findContours(window_right, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in contours:
+            M = cv2.moments(cnt)
+            if M["m00"] != 0:
+                cx = int(M["m10"]/M["m00"])
+                right_base = x_start + cx
+                rx.append(right_base)
+        cv2.rectangle(mask_copy, (x_start, y), (x_end, y-WINDOW_HEIGHT), 255, 2)
+
+        y -= WINDOW_HEIGHT
+
+    # 空值補齊
+    if len(lx) == 0: lx = prevLx
+    else: prevLx = lx
+    if len(rx) == 0: rx = prevRx
+    else: prevRx = rx
+
+    return lx, rx, mask_copy, prevLx, prevRx
 
 # ====== Main ======
 frames_dir = "dataset/run_1756133797/frames"
-frame_files = sorted(
-    [f for f in os.listdir(frames_dir) if f.endswith(".jpg") or f.endswith(".png")]
-)
-
+frames_dir = "dataset/run_1755702281/frames"
+frame_files = sorted([f for f in os.listdir(frames_dir) if f.endswith(".jpg") or f.endswith(".png")])
 if not frame_files:
-    raise RuntimeError(f"No frames found in {frames_dir}")
+    raise RuntimeError("No frames found!")
 
 first_frame = cv2.imread(os.path.join(frames_dir, frame_files[0]))
 height, width = first_frame.shape[:2]
@@ -74,26 +121,28 @@ start_x = int(width * CROP_LEFT_PERCENTAGE)
 end_x = int(width * (1 - CROP_RIGHT_PERCENTAGE))
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-out = cv2.VideoWriter("output_bird_eye_view.mp4", fourcc, 20.0, (crop_width, crop_height))
+out = cv2.VideoWriter("output_bird_eye_view_sliding_window.mp4", fourcc, 20.0, (crop_width, crop_height))
+
+prevLx, prevRx = [], []
 
 for fname in frame_files:
     frame = cv2.imread(os.path.join(frames_dir, fname))
     if frame is None:
         continue
 
-    # 裁切
     frame = frame[:crop_height, start_x:end_x]
-
-    # Bird’s Eye View
     bird_eye_frame, src_points, dst_points = apply_bird_eye_view(frame)
-
     processed_frame = preprocess_frame(bird_eye_frame)
 
-    # 顯示
-    cv2.namedWindow("ADAS Lane Detection - Bird's Eye View", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("ADAS Lane Detection - Bird's Eye View", 960, 540)
-    cv2.imshow("ADAS Lane Detection - Bird's Eye View", bird_eye_frame)
+    lx, rx, mask_copy, prevLx, prevRx = sliding_window_lane_detection(processed_frame, prevLx, prevRx)
 
+    cv2.namedWindow("Lane Detection", cv2.WINDOW_NORMAL)
+
+    # 設定視窗大小
+    cv2.resizeWindow("Lane Detection", 960, 540)  # 寬 960 高 540
+
+    # 顯示影像
+    cv2.imshow("Lane Detection", mask_copy)
     out.write(bird_eye_frame)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
