@@ -59,8 +59,9 @@ def apply_bird_eye_view(frame):
         [width * 0.1, height]
     ])
     M = cv2.getPerspectiveTransform(src, dst)
+    Minv = cv2.getPerspectiveTransform(dst, src)   # 反轉換矩陣
     bird_eye = cv2.warpPerspective(frame, M, (width, height))
-    return bird_eye, src, dst
+    return bird_eye, src, dst, M, Minv
 
 # ====== 滑動窗口追蹤車道線 Function ======
 def sliding_window_lane_detection(binary_warped, prevLx=[], prevRx=[]):
@@ -70,8 +71,9 @@ def sliding_window_lane_detection(binary_warped, prevLx=[], prevRx=[]):
     right_base = np.argmax(histogram[midpoint:]) + midpoint
 
     lx, rx = [], []
+    lx_points, rx_points = [], []
     y = binary_warped.shape[0]
-    mask_copy = binary_warped.copy()
+    mask_copy = cv2.cvtColor(binary_warped, cv2.COLOR_GRAY2BGR)
 
     while y > 0:
         # 左邊
@@ -85,7 +87,8 @@ def sliding_window_lane_detection(binary_warped, prevLx=[], prevRx=[]):
                 cx = int(M["m10"]/M["m00"])
                 left_base = x_start + cx
                 lx.append(left_base)
-        cv2.rectangle(mask_copy, (x_start, y), (x_end, y-WINDOW_HEIGHT), 255, 2)
+                lx_points.append((left_base, y - WINDOW_HEIGHT//2))
+        cv2.rectangle(mask_copy, (x_start, y), (x_end, y-WINDOW_HEIGHT), (0,255,0), 2)
 
         # 右邊
         x_start = max(right_base - WINDOW_WIDTH//2, 0)
@@ -98,7 +101,8 @@ def sliding_window_lane_detection(binary_warped, prevLx=[], prevRx=[]):
                 cx = int(M["m10"]/M["m00"])
                 right_base = x_start + cx
                 rx.append(right_base)
-        cv2.rectangle(mask_copy, (x_start, y), (x_end, y-WINDOW_HEIGHT), 255, 2)
+                rx_points.append((right_base, y - WINDOW_HEIGHT//2))
+        cv2.rectangle(mask_copy, (x_start, y), (x_end, y-WINDOW_HEIGHT), (0,0,255), 2)
 
         y -= WINDOW_HEIGHT
 
@@ -108,11 +112,34 @@ def sliding_window_lane_detection(binary_warped, prevLx=[], prevRx=[]):
     if len(rx) == 0: rx = prevRx
     else: prevRx = rx
 
-    return lx, rx, mask_copy, prevLx, prevRx
+    return lx, rx, lx_points, rx_points, mask_copy, prevLx, prevRx
 
+# ====== 畫回原圖 ======
+def draw_lane_on_original(frame, left_pts, right_pts, Minv):
+    overlay = frame.copy()
+
+    if len(left_pts) > 0 and len(right_pts) > 0:
+        left = np.array(left_pts, dtype=np.float32).reshape(-1,1,2)
+        right = np.array(right_pts, dtype=np.float32).reshape(-1,1,2)
+
+        left_unwarp = cv2.perspectiveTransform(left, Minv)
+        right_unwarp = cv2.perspectiveTransform(right, Minv)
+
+        # 畫車道邊界
+        cv2.polylines(overlay, [np.int32(left_unwarp)], False, (0,255,0), 5)
+        cv2.polylines(overlay, [np.int32(right_unwarp)], False, (0,255,0), 5)
+
+        # 填滿區域 (左線 + 右線)
+        pts = np.vstack((left_unwarp, right_unwarp[::-1]))  # 拼成封閉區域
+        cv2.fillPoly(overlay, [np.int32(pts)], (255, 0, 0))  # 藍色填滿
+
+        # 透明度混合
+        alpha = 0.3  # 透明度
+        frame = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
+
+    return frame
 # ====== Main ======
 frames_dir = "dataset/run_1756133797/frames"
-frames_dir = "dataset/run_1755702281/frames"
 frame_files = sorted([f for f in os.listdir(frames_dir) if f.endswith(".jpg") or f.endswith(".png")])
 if not frame_files:
     raise RuntimeError("No frames found!")
@@ -125,7 +152,7 @@ start_x = int(width * CROP_LEFT_PERCENTAGE)
 end_x = int(width * (1 - CROP_RIGHT_PERCENTAGE))
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-out = cv2.VideoWriter("output_bird_eye_view_sliding_window.mp4", fourcc, 20.0, (crop_width, crop_height))
+out = cv2.VideoWriter("output_lane_overlay.mp4", fourcc, 20.0, (crop_width, crop_height))
 
 prevLx, prevRx = [], []
 
@@ -135,19 +162,19 @@ for fname in frame_files:
         continue
 
     frame = frame[:crop_height, start_x:end_x]
-    bird_eye_frame, src_points, dst_points = apply_bird_eye_view(frame)
+    bird_eye_frame, src_points, dst_points, M, Minv = apply_bird_eye_view(frame)
     processed_frame = preprocess_frame(bird_eye_frame)
 
-    lx, rx, mask_copy, prevLx, prevRx = sliding_window_lane_detection(processed_frame, prevLx, prevRx)
+    lx, rx, lx_pts, rx_pts, mask_copy, prevLx, prevRx = sliding_window_lane_detection(processed_frame, prevLx, prevRx)
+
+    # 畫回原圖
+    frame_with_lane = draw_lane_on_original(frame.copy(), lx_pts, rx_pts, Minv)
 
     cv2.namedWindow("Lane Detection", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Lane Detection", 960, 540)
+    cv2.imshow("Lane Detection", frame_with_lane)
 
-    # 設定視窗大小
-    cv2.resizeWindow("Lane Detection", 960, 540)  # 寬 960 高 540
-
-    # 顯示影像
-    cv2.imshow("Lane Detection", mask_copy)
-    out.write(bird_eye_frame)
+    out.write(frame_with_lane)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
