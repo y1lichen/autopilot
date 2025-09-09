@@ -47,10 +47,10 @@ def preprocess_frame(frame):
 def apply_bird_eye_view(frame):
     height, width = frame.shape[:2]
     src = np.float32([
-        [width * 0.1, height * 0.65],
-        [width * 0.5, height * 0.65],
+        [width * 0.15, height * 0.75],
+        [width * 0.5, height * 0.75],
         [width * 0.65, height * 1.0],
-        [0, height * 1.0]
+        [width * 0.00, height * 1.0]
     ])
     dst = np.float32([
         [width * 0.1, 0],
