@@ -7,7 +7,7 @@ CROP_BOTTOM_PERCENTAGE = 0.35  # 裁掉底部比例
 CROP_LEFT_PERCENTAGE = 0.35    # 裁掉左側比例
 CROP_RIGHT_PERCENTAGE = 0.1    # 裁掉右側比例
 WINDOW_WIDTH = 100              # 滑動視窗寬度
-WINDOW_HEIGHT = 40              # 滑動視窗高度
+WINDOW_HEIGHT = 50              # 滑動視窗高度
 MIN_LANE_POINTS = 5             # 擬合多項式所需最少點數
 OFFSET_THRESHOLD = 20           # 車道中心偏移判斷閾值 (像素)
 
@@ -175,6 +175,8 @@ def detect_turn(left_pts, right_pts, frame_width):
 
 # ====== Main ======
 frames_dir = "dataset/run_1755702281/frames"
+frames_dir = "dataset/run_1755702912/frames" # night
+frames_dir = "dataset/run_1756133797/frames"
 frame_files = sorted([f for f in os.listdir(frames_dir) if f.endswith(".jpg") or f.endswith(".png")])
 if not frame_files:
     raise RuntimeError("No frames found!")
