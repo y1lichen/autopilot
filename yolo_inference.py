@@ -1,14 +1,13 @@
 import os
 import cv2
 import numpy as np
+import torch
 from ultralytics import YOLO
 
 # === 載入 YOLO segmentation 模型 ===
 model = YOLO("yolo_weight/best.onnx", task="segment")
 
 # === 影片幀資料夾 ===
-frames_dir = "dataset/run_1755702281/frames"
-frames_dir = "dataset/run_1755702912/frames" # night
 frames_dir = "dataset/run_1756133797/frames"
 frame_files = sorted([f for f in os.listdir(frames_dir) if f.endswith(".jpg") or f.endswith(".png")])
 if not frame_files:
@@ -37,8 +36,9 @@ for fname in frame_files:
     result = results[0]
 
     # 如果有多條 lane mask，只保留最靠近畫面中心的
-    masks = result.masks.data  # shape: (N, H, W)
-    if masks is not None and len(masks) > 0:
+
+    if result.masks is not None and result.masks.data is not None:
+        masks = result.masks.data
         img_center_x = crop_frame.shape[1] // 2
 
         # 計算每條 mask 的水平中心
@@ -57,7 +57,8 @@ for fname in frame_files:
 
         # 只保留這條 mask
         masks = np.expand_dims(best_mask, axis=0)
-        result.masks.data = masks
+        # ONNX 模型返回 numpy array，plot 需要 torch.Tensor
+        result.masks.data = torch.from_numpy(masks)
 
     # 繪製 mask 與 bounding box
     crop_with_mask = result.plot()
