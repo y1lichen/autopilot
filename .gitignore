@@ -1,3 +1,5 @@
 /dataset
 .venv
 .DS_Store
+/yolo_dataset
+/yolo_weight
