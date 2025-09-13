@@ -23,6 +23,8 @@ out = cv2.VideoWriter("output_lane_yolo_onnx.mp4", fourcc, 20.0, (width, height)
 # === 推論區域設定（只保留上方 65% 高度） ===
 crop_y = int(height * 0.65)
 
+triangle_offset = 50 # 三角形水平偏移參數（像素，正數往右，負數往左）
+
 for fname in frame_files:
     frame = cv2.imread(os.path.join(frames_dir, fname))
     if frame is None:
@@ -36,7 +38,6 @@ for fname in frame_files:
     result = results[0]
 
     # 如果有多條 lane mask，只保留最靠近畫面中心的
-
     if result.masks is not None and result.masks.data is not None:
         masks = result.masks.data
         img_center_x = crop_frame.shape[1] // 2
@@ -66,6 +67,19 @@ for fname in frame_files:
     # 疊回完整影像
     img_with_mask = frame.copy()
     img_with_mask[:crop_y, :, :] = crop_with_mask
+
+    # === 在裁切區域中心畫黃色三角形 ===
+    center_x = width // 2 + triangle_offset
+    center_y = crop_y
+    triangle_size = 20
+
+    pts = np.array([
+        [center_x, center_y - triangle_size],         # 上頂點
+        [center_x - triangle_size, center_y + triangle_size],  # 左下
+        [center_x + triangle_size, center_y + triangle_size]   # 右下
+    ], np.int32)
+
+    cv2.fillPoly(img_with_mask, [pts], (0, 255, 255))  # 黃色 (BGR)
 
     # 寫入影片
     out.write(img_with_mask)
