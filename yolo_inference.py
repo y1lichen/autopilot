@@ -28,9 +28,16 @@ out = cv2.VideoWriter("output_lane_yolo_onnx.mp4", fourcc, 20.0, (width, height)
 crop_y = int(height * 0.65)
 
 triangle_offset = 50 # 三角形水平偏移參數（像素，正數往右，負數往左）
+triangle_size = 20 # 三角形大小
+
 # 根據三角形偏移量設定車輛中心位置
 # Set the vehicle center position based on the triangle offset
 vehicle_center_x = width // 2 + triangle_offset
+
+# 取得黃色三角形的頂點座標，用於後續判斷
+# Get the coordinates of the yellow triangle's vertex for later checks
+triangle_vertex_x = vehicle_center_x
+triangle_vertex_y = crop_y - triangle_size
 
 for fname in frame_files:
     frame = cv2.imread(os.path.join(frames_dir, fname))
@@ -68,16 +75,30 @@ for fname in frame_files:
         best_mask = masks[best_idx]
         best_box = result.boxes.data[best_idx]
 
-        # === 關鍵修改：只保留最中心的遮罩和邊界框 ===
-        # === Key modification: Keep only the center mask and its bounding box ===
+        # === 新增條件：如果車道邊界框沒有包含黃色三角形頂點，則不繪製 ===
+        # === New condition: If the lane's bounding box does not contain the yellow triangle's vertex, do not draw ===
+        x1, y1, x2, y2 = best_box[:4]
         
-        # 只保留這條 mask
-        # Keep only this mask
-        result.masks.data = torch.from_numpy(np.expand_dims(best_mask, axis=0))
+        # 檢查黃色三角形的頂點是否在邊界框內
+        # Check if the vertex of the yellow triangle is within the bounding box
+        is_triangle_in_box = (x1 <= triangle_vertex_x <= x2) and (y1 <= triangle_vertex_y <= y2)
 
-        # 只保留這個邊界框
-        # Keep only this bounding box
-        result.boxes.data = torch.from_numpy(np.expand_dims(best_box.cpu().numpy(), axis=0))
+        if is_triangle_in_box:
+            # === 關鍵修改：只保留最中心的遮罩和邊界框 ===
+            # === Key modification: Keep only the center mask and its bounding box ===
+            
+            # 只保留這條 mask
+            # Keep only this mask
+            result.masks.data = torch.from_numpy(np.expand_dims(best_mask, axis=0))
+    
+            # 只保留這個邊界框
+            # Keep only this bounding box
+            result.boxes.data = torch.from_numpy(np.expand_dims(best_box.cpu().numpy(), axis=0))
+        else:
+            # 如果沒有包含，則清空繪圖資料
+            # If not contained, clear the plotting data
+            result.masks = None
+            result.boxes = None
 
     # 繪製 mask 與 bounding box
     # Draw the mask and bounding box
@@ -92,7 +113,6 @@ for fname in frame_files:
     # Draw a yellow triangle at the center of the cropped area
     center_x = width // 2 + triangle_offset
     center_y = crop_y
-    triangle_size = 20
 
     pts = np.array([
         [center_x, center_y - triangle_size],      # 上頂點 / Top vertex
