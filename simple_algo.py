@@ -55,38 +55,33 @@ def apply_bird_eye_view(frame):
         [width * 0.00, height * 1.0]
     ])
     dst = np.float32([
-        [width * 0.1, 0],
-        [width * 0.95, 0],
-        [width * 0.95, height],
-        [width * 0.1, height]
+        [width * 0.0, 0],
+        [width * 1, 0],
+        [width * 1, height],
+        [width * 0.0, height]
     ])
     M = cv2.getPerspectiveTransform(src, dst)
     Minv = cv2.getPerspectiveTransform(dst, src)
     bird_eye = cv2.warpPerspective(frame, M, (width, height))
     return bird_eye, M, Minv
 
-# ====== 新增函式: 繪製並遮罩 ROI 區域 ======
+# ====== 繪製並遮罩 ROI 區域 ======
 def draw_roi_and_mask(frame):
     height, width = frame.shape[:2]
-    # 使用與 bird's eye view 相同的源點來定義 ROI
     src = np.float32([
         [width * 0.15, height * 0.6],
         [width * 0.7, height * 0.6],
-        [width * 0.8, height * 1.0],
+        [width * 0.85, height * 1.0],
         [width * 0.00, height * 1.0]
     ])
     
-    # 創建一個全黑的遮罩
     mask = np.zeros_like(frame)
-    # 將 ROI 區域填充為白色
     cv2.fillPoly(mask, [np.int32(src)], (255, 255, 255))
     
-    # 將原始影像與遮罩進行位元 AND 運算，以保留 ROI 內的區域
     masked_frame = cv2.bitwise_and(frame, mask)
     
-    # 建立一個只畫梯形邊界的影像以供保存
     roi_outline_frame = frame.copy()
-    cv2.polylines(roi_outline_frame, [np.int32(src)], True, (0, 255, 255), 3) # 黃色線條
+    cv2.polylines(roi_outline_frame, [np.int32(src)], True, (0, 255, 255), 3)
     
     return masked_frame, roi_outline_frame
 
@@ -102,7 +97,6 @@ def sliding_window_lane_detection(binary_warped, prevLx=[], prevRx=[]):
     mask_copy = cv2.cvtColor(binary_warped, cv2.COLOR_GRAY2BGR)
 
     while y > 0:
-        # 左邊
         x_start = max(left_base - WINDOW_WIDTH//2, 0)
         x_end = min(left_base + WINDOW_WIDTH//2, binary_warped.shape[1])
         window_left = binary_warped[y-WINDOW_HEIGHT:y, x_start:x_end]
@@ -115,7 +109,6 @@ def sliding_window_lane_detection(binary_warped, prevLx=[], prevRx=[]):
                 lx_pts.append((left_base, y - WINDOW_HEIGHT//2))
         cv2.rectangle(mask_copy, (x_start, y), (x_end, y-WINDOW_HEIGHT), (0,255,0), 2)
 
-        # 右邊
         x_start = max(right_base - WINDOW_WIDTH//2, 0)
         x_end = min(right_base + WINDOW_WIDTH//2, binary_warped.shape[1])
         window_right = binary_warped[y-WINDOW_HEIGHT:y, x_start:x_end]
@@ -130,7 +123,6 @@ def sliding_window_lane_detection(binary_warped, prevLx=[], prevRx=[]):
 
         y -= WINDOW_HEIGHT
 
-    # 空值補齊
     if len(lx_pts) == 0: lx_pts = prevLx
     else: prevLx = lx_pts
     if len(rx_pts) == 0: rx_pts = prevRx
@@ -148,16 +140,32 @@ def draw_lane_on_original(frame, left_pts, right_pts, Minv):
         left_unwarp = cv2.perspectiveTransform(left, Minv)
         right_unwarp = cv2.perspectiveTransform(right, Minv)
 
-        # 畫車道邊界
         cv2.polylines(overlay, [np.int32(left_unwarp)], False, (0,255,0), 5)
         cv2.polylines(overlay, [np.int32(right_unwarp)], False, (0,255,0), 5)
 
-        # 填滿區域 (透明藍色)
         pts = np.vstack((left_unwarp, right_unwarp[::-1]))
         cv2.fillPoly(overlay, [np.int32(pts)], (255,0,0))
         alpha = 0.3
         frame = cv2.addWeighted(overlay, alpha, frame, 1-alpha, 0)
     return frame
+
+# ====== 新增函數: 在彩色 Bird's Eye View 上繪製車道線 ======
+def draw_lane_on_bird_eye(bird_eye_color, left_pts, right_pts):
+    # 直接在彩色的 Bird's Eye View 上繪圖
+    bird_eye_with_lane = bird_eye_color.copy()
+
+    if len(left_pts) > 0 and len(right_pts) > 0:
+        cv2.polylines(bird_eye_with_lane, [np.int32(left_pts)], False, (0, 255, 0), 5)
+        cv2.polylines(bird_eye_with_lane, [np.int32(right_pts)], False, (0, 255, 0), 5)
+
+        pts = np.vstack((np.int32(left_pts), np.int32(right_pts[::-1])))
+        overlay = bird_eye_with_lane.copy()
+        cv2.fillPoly(overlay, [pts], (255, 0, 0))
+        alpha = 0.3
+        bird_eye_with_lane = cv2.addWeighted(overlay, alpha, bird_eye_with_lane, 1 - alpha, 0)
+
+    return bird_eye_with_lane
+
 
 # ====== 判斷方向 ======
 def detect_turn(left_pts, right_pts, frame_width):
@@ -212,6 +220,7 @@ end_x = int(width * (1 - CROP_RIGHT_PERCENTAGE))
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter("output_lane_turn_detection.mp4", fourcc, 20.0, (crop_width, crop_height))
+out_bird_eye = cv2.VideoWriter("output_bird_eye_lane.mp4", fourcc, 20.0, (crop_width, crop_height))
 
 prevLx, prevRx = [], []
 first_frame_processed = False
@@ -222,33 +231,41 @@ for fname in frame_files:
 
     frame_crop = frame[:crop_height, start_x:end_x]
     
-    # 繪製並遮罩 ROI 區域
     masked_frame, roi_outline_frame = draw_roi_and_mask(frame_crop)
     
     if not first_frame_processed:
         cv2.imwrite("roi_frame_example.jpg", roi_outline_frame)
         first_frame_processed = True
         
-    bird_eye_frame, M, Minv = apply_bird_eye_view(masked_frame)
-    processed_frame = preprocess_frame(bird_eye_frame)
+    bird_eye_frame_color, M, Minv = apply_bird_eye_view(masked_frame)
+    processed_frame = preprocess_frame(bird_eye_frame_color)
 
     lx_pts, rx_pts, mask_copy, prevLx, prevRx = sliding_window_lane_detection(processed_frame, prevLx, prevRx)
 
     frame_with_lane = draw_lane_on_original(frame_crop.copy(), lx_pts, rx_pts, Minv)
+    
+    # 在彩色的 Bird's Eye View 上繪製車道線
+    bird_eye_with_lane = draw_lane_on_bird_eye(bird_eye_frame_color.copy(), lx_pts, rx_pts)
 
-    # 判斷方向
     turn_status = detect_turn(lx_pts, rx_pts, frame_crop.shape[1])
 
-    # 顯示方向文字
     cv2.putText(frame_with_lane, turn_status, (30,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 3)
+    cv2.putText(bird_eye_with_lane, turn_status, (30,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 3)
+
 
     cv2.namedWindow("Lane Detection", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Lane Detection", 960, 540)
     cv2.imshow("Lane Detection", frame_with_lane)
     out.write(frame_with_lane)
 
+    cv2.namedWindow("Bird's Eye View with Lane", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Bird's Eye View with Lane", 960, 540)
+    cv2.imshow("Bird's Eye View with Lane", bird_eye_with_lane)
+    out_bird_eye.write(bird_eye_with_lane)
+
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
 out.release()
+out_bird_eye.release()
 cv2.destroyAllWindows()
