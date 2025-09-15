@@ -3,7 +3,7 @@ import numpy as np
 import os
 
 # ====== 參數設定 ======
-CROP_BOTTOM_PERCENTAGE = 0.35
+CROP_BOTTOM_PERCENTAGE = 0.45
 CROP_LEFT_PERCENTAGE = 0.35
 CROP_RIGHT_PERCENTAGE = 0.1
 WINDOW_WIDTH = 100
@@ -204,9 +204,9 @@ def detect_turn(left_pts, right_pts, frame_width):
     return turn
 
 # ====== Main ======
-frames_dir = "dataset/run_1755702281/frames"
+# frames_dir = "dataset/run_1755702281/frames"
 # frames_dir = "dataset/run_1755702912/frames" # night
-# frames_dir = "dataset/run_1756133797/frames"
+frames_dir = "dataset/run_1756133797/frames"
 frame_files = sorted([f for f in os.listdir(frames_dir) if f.endswith(".jpg") or f.endswith(".png")])
 if not frame_files:
     raise RuntimeError("No frames found!")
