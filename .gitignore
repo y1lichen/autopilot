@@ -5,3 +5,5 @@
 /yolo_weight
 /out_curve
 /out_frames
+*.pyc
+*.mp4
