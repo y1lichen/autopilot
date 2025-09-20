@@ -14,7 +14,7 @@ OFFSET_THRESHOLD = 20
 # ====== 前處理 ======
 def preprocess_frame(frame):
     hls = cv2.cvtColor(frame, cv2.COLOR_BGR2HLS)
-    white_mask = cv2.inRange(hls, np.array([0, 200, 0]), np.array([255, 255, 255]))
+    white_mask = cv2.inRange(hls, np.array([0, 120, 0]), np.array([255, 255, 255]))
     yellow_mask = cv2.inRange(hls, np.array([15, 30, 115]), np.array([35, 204, 255]))
     color_mask = cv2.bitwise_or(white_mask, yellow_mask)
 
@@ -50,8 +50,8 @@ def apply_bird_eye_view(frame):
     height, width = frame.shape[:2]
     src = np.float32([
         [width * 0.3, height * 0.75],
-        [width * 0.5, height * 0.75],
-        [width * 0.4, height * 1.0],
+        [width * 0.45, height * 0.75],
+        [width * 0.35, height * 1.0],
         [width * 0.2, height * 1.0]
     ])
     dst = np.float32([
@@ -66,7 +66,7 @@ def apply_bird_eye_view(frame):
     return bird_eye, M, Minv
 # ====== 滑動窗口追蹤車道線 ======
 def sliding_window_lane_detection(binary_warped, prevLx=[], prevRx=[]):
-    histogram = np.sum(binary_warped[binary_warped.shape[0]//2:, :], axis=0)
+    histogram = np.sum(binary_warped[int(binary_warped.shape[0]*0.8):, :], axis=0)
     midpoint = histogram.shape[0] // 2
     left_base = np.argmax(histogram[:midpoint])
     right_base = np.argmax(histogram[midpoint:]) + midpoint
@@ -235,7 +235,10 @@ for fname in frame_files:
     cv2.namedWindow("Bird's Eye View with Lane", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Bird's Eye View with Lane", 960, 540)
     cv2.imshow("Bird's Eye View with Lane", bird_eye_with_lane)
-    out_bird_eye.write(bird_eye_with_lane)
+    # out_bird_eye.write(bird_eye_with_lane)
+    cv2.namedWindow("Bird's Eye View Binary", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Bird's Eye View Binary", 960, 540)
+    cv2.imshow("Bird's Eye View Binary", processed_frame)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
