@@ -5,7 +5,7 @@ import os
 # ====== 參數設定 ======
 CROP_BOTTOM_PERCENTAGE = 0.45
 CROP_LEFT_PERCENTAGE = 0.35
-CROP_RIGHT_PERCENTAGE = 0.1
+CROP_RIGHT_PERCENTAGE = 0.2
 WINDOW_WIDTH = 100
 WINDOW_HEIGHT = 50
 MIN_LANE_POINTS = 5
@@ -49,16 +49,16 @@ def preprocess_frame(frame):
 def apply_bird_eye_view(frame):
     height, width = frame.shape[:2]
     src = np.float32([
-        [width * 0.15, height * 0.75],
+        [width * 0.3, height * 0.75],
         [width * 0.5, height * 0.75],
-        [width * 0.65, height * 1.0],
-        [width * 0.00, height * 1.0]
+        [width * 0.4, height * 1.0],
+        [width * 0.2, height * 1.0]
     ])
     dst = np.float32([
-        [width * 0.0, 0],
-        [width * 1, 0],
-        [width * 1, height],
-        [width * 0.0, height]
+        [width * 0.3, 0],
+        [width * 0.5, 0],
+        [width * 0.4, height],
+        [width * 0.3, height]
     ])
     M = cv2.getPerspectiveTransform(src, dst)
     Minv = cv2.getPerspectiveTransform(dst, src)
