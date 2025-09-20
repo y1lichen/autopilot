@@ -11,10 +11,10 @@ OUT_FRAMES = "out_frames"  # "" = 不存逐張
 GRIDING_NUM = 100
 CLS_NUM_PER_LANE = 56
 # 裁切比例
-TOP_RATIO = 0.2
+TOP_RATIO = 0.3
 BOTTOM_RATIO = 0.4
-LEFT_RATIO = 0.35
-RIGHT_RATIO = 0.3
+LEFT_RATIO = 0.0
+RIGHT_RATIO = 0.0
 # ---------------------------
 
 # 讀 frames

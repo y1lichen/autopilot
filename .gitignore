@@ -3,3 +3,5 @@
 .DS_Store
 /yolo_dataset
 /yolo_weight
+/out_curve
+/out_frames

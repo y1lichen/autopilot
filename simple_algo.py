@@ -64,27 +64,6 @@ def apply_bird_eye_view(frame):
     Minv = cv2.getPerspectiveTransform(dst, src)
     bird_eye = cv2.warpPerspective(frame, M, (width, height))
     return bird_eye, M, Minv
-
-# ====== 繪製並遮罩 ROI 區域 ======
-def draw_roi_and_mask(frame):
-    height, width = frame.shape[:2]
-    src = np.float32([
-        [width * 0.15, height * 0.6],
-        [width * 0.7, height * 0.6],
-        [width * 0.85, height * 1.0],
-        [width * 0.00, height * 1.0]
-    ])
-    
-    mask = np.zeros_like(frame)
-    cv2.fillPoly(mask, [np.int32(src)], (255, 255, 255))
-    
-    masked_frame = cv2.bitwise_and(frame, mask)
-    
-    roi_outline_frame = frame.copy()
-    cv2.polylines(roi_outline_frame, [np.int32(src)], True, (0, 255, 255), 3)
-    
-    return masked_frame, roi_outline_frame
-
 # ====== 滑動窗口追蹤車道線 ======
 def sliding_window_lane_detection(binary_warped, prevLx=[], prevRx=[]):
     histogram = np.sum(binary_warped[binary_warped.shape[0]//2:, :], axis=0)
@@ -231,13 +210,8 @@ for fname in frame_files:
 
     frame_crop = frame[:crop_height, start_x:end_x]
     
-    masked_frame, roi_outline_frame = draw_roi_and_mask(frame_crop)
-    
-    if not first_frame_processed:
-        cv2.imwrite("roi_frame_example.jpg", roi_outline_frame)
-        first_frame_processed = True
         
-    bird_eye_frame_color, M, Minv = apply_bird_eye_view(masked_frame)
+    bird_eye_frame_color, M, Minv = apply_bird_eye_view(frame_crop)
     processed_frame = preprocess_frame(bird_eye_frame_color)
 
     lx_pts, rx_pts, mask_copy, prevLx, prevRx = sliding_window_lane_detection(processed_frame, prevLx, prevRx)
