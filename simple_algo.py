@@ -49,8 +49,8 @@ def preprocess_frame(frame):
 def apply_bird_eye_view(frame):
     height, width = frame.shape[:2]
     src = np.float32([
-        [width * 0.3, height * 0.75],
-        [width * 0.45, height * 0.75],
+        [width * 0.3, height * 0.7],
+        [width * 0.45, height * 0.7],
         [width * 0.35, height * 1.0],
         [width * 0.2, height * 1.0]
     ])
@@ -64,9 +64,10 @@ def apply_bird_eye_view(frame):
     Minv = cv2.getPerspectiveTransform(dst, src)
     bird_eye = cv2.warpPerspective(frame, M, (width, height))
     return bird_eye, M, Minv
+
 # ====== 滑動窗口追蹤車道線 ======
 def sliding_window_lane_detection(binary_warped, prevLx=[], prevRx=[]):
-    histogram = np.sum(binary_warped[int(binary_warped.shape[0]*0.8):, :], axis=0)
+    histogram = np.sum(binary_warped[int(binary_warped.shape[0]*0.75):, :], axis=0)
     midpoint = histogram.shape[0] // 2
     left_base = np.argmax(histogram[:midpoint])
     right_base = np.argmax(histogram[midpoint:]) + midpoint
@@ -107,7 +108,7 @@ def sliding_window_lane_detection(binary_warped, prevLx=[], prevRx=[]):
     if len(rx_pts) == 0: rx_pts = prevRx
     else: prevRx = rx_pts
 
-    return lx_pts, rx_pts, mask_copy, prevLx, prevRx
+    return lx_pts, rx_pts, mask_copy, prevLx, prevRx, histogram
 
 # ====== 畫回原圖並加透明區塊 ======
 def draw_lane_on_original(frame, left_pts, right_pts, Minv):
@@ -128,11 +129,9 @@ def draw_lane_on_original(frame, left_pts, right_pts, Minv):
         frame = cv2.addWeighted(overlay, alpha, frame, 1-alpha, 0)
     return frame
 
-# ====== 新增函數: 在彩色 Bird's Eye View 上繪製車道線 ======
+# ====== 在彩色 Bird's Eye View 上繪製車道線 ======
 def draw_lane_on_bird_eye(bird_eye_color, left_pts, right_pts):
-    # 直接在彩色的 Bird's Eye View 上繪圖
     bird_eye_with_lane = bird_eye_color.copy()
-
     if len(left_pts) > 0 and len(right_pts) > 0:
         cv2.polylines(bird_eye_with_lane, [np.int32(left_pts)], False, (0, 255, 0), 5)
         cv2.polylines(bird_eye_with_lane, [np.int32(right_pts)], False, (0, 255, 0), 5)
@@ -140,11 +139,26 @@ def draw_lane_on_bird_eye(bird_eye_color, left_pts, right_pts):
         pts = np.vstack((np.int32(left_pts), np.int32(right_pts[::-1])))
         overlay = bird_eye_with_lane.copy()
         cv2.fillPoly(overlay, [pts], (255, 0, 0))
-        alpha = 0.3
-        bird_eye_with_lane = cv2.addWeighted(overlay, alpha, bird_eye_with_lane, 1 - alpha, 0)
-
+        bird_eye_with_lane = cv2.addWeighted(overlay, 0.3, bird_eye_with_lane, 0.7, 0)
     return bird_eye_with_lane
 
+# ====== 畫 Histogram 在 Bird's Eye 下方 ======
+def draw_histogram_on_bird_eye(bird_eye_color, histogram):
+    height, width = bird_eye_color.shape[:2]
+    hist_img = np.zeros((150, width, 3), dtype=np.uint8)  # 150 高度的空白區域
+
+    # 正規化 histogram 以符合高度
+    if np.max(histogram) > 0:
+        norm_hist = (histogram / np.max(histogram) * hist_img.shape[0]).astype(np.int32)
+    else:
+        norm_hist = histogram
+
+    for x, h in enumerate(norm_hist):
+        cv2.line(hist_img, (x, hist_img.shape[0]), (x, hist_img.shape[0]-h), (0,255,0), 1)
+
+    # 疊加在 bird eye 下方
+    combined = np.vstack((bird_eye_color, hist_img))
+    return combined
 
 # ====== 判斷方向 ======
 def detect_turn(left_pts, right_pts, frame_width):
@@ -183,8 +197,6 @@ def detect_turn(left_pts, right_pts, frame_width):
     return turn
 
 # ====== Main ======
-# frames_dir = "dataset/run_1755702281/frames"
-# frames_dir = "dataset/run_1755702912/frames" # night
 frames_dir = "dataset/run_1756133797/frames"
 frame_files = sorted([f for f in os.listdir(frames_dir) if f.endswith(".jpg") or f.endswith(".png")])
 if not frame_files:
@@ -199,45 +211,35 @@ end_x = int(width * (1 - CROP_RIGHT_PERCENTAGE))
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter("output_lane_turn_detection.mp4", fourcc, 20.0, (crop_width, crop_height))
-out_bird_eye = cv2.VideoWriter("output_bird_eye_lane.mp4", fourcc, 20.0, (crop_width, crop_height))
+out_bird_eye = cv2.VideoWriter("output_bird_eye_lane.mp4", fourcc, 20.0, (crop_width, crop_height+150))
 
 prevLx, prevRx = [], []
-first_frame_processed = False
 for fname in frame_files:
     frame = cv2.imread(os.path.join(frames_dir, fname))
     if frame is None:
         continue
 
     frame_crop = frame[:crop_height, start_x:end_x]
-    
-        
     bird_eye_frame_color, M, Minv = apply_bird_eye_view(frame_crop)
     processed_frame = preprocess_frame(bird_eye_frame_color)
 
-    lx_pts, rx_pts, mask_copy, prevLx, prevRx = sliding_window_lane_detection(processed_frame, prevLx, prevRx)
+    lx_pts, rx_pts, mask_copy, prevLx, prevRx, histogram = sliding_window_lane_detection(processed_frame, prevLx, prevRx)
 
     frame_with_lane = draw_lane_on_original(frame_crop.copy(), lx_pts, rx_pts, Minv)
-    
-    # 在彩色的 Bird's Eye View 上繪製車道線
     bird_eye_with_lane = draw_lane_on_bird_eye(bird_eye_frame_color.copy(), lx_pts, rx_pts)
+    bird_eye_with_hist = draw_histogram_on_bird_eye(bird_eye_with_lane, histogram)
 
     turn_status = detect_turn(lx_pts, rx_pts, frame_crop.shape[1])
 
     cv2.putText(frame_with_lane, turn_status, (30,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 3)
-    cv2.putText(bird_eye_with_lane, turn_status, (30,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 3)
+    cv2.putText(bird_eye_with_hist, turn_status, (30,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 3)
 
-
-    cv2.namedWindow("Lane Detection", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Lane Detection", 960, 540)
     cv2.imshow("Lane Detection", frame_with_lane)
     out.write(frame_with_lane)
 
-    cv2.namedWindow("Bird's Eye View with Lane", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Bird's Eye View with Lane", 960, 540)
-    cv2.imshow("Bird's Eye View with Lane", bird_eye_with_lane)
-    # out_bird_eye.write(bird_eye_with_lane)
-    cv2.namedWindow("Bird's Eye View Binary", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Bird's Eye View Binary", 960, 540)
+    cv2.imshow("Bird's Eye View with Lane + Histogram", bird_eye_with_hist)
+    out_bird_eye.write(bird_eye_with_hist)
+
     cv2.imshow("Bird's Eye View Binary", processed_frame)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
