@@ -6,7 +6,7 @@ import os
 CROP_BOTTOM_PERCENTAGE = 0.4
 CROP_LEFT_PERCENTAGE = 0.35
 CROP_RIGHT_PERCENTAGE = 0.2
-WINDOW_WIDTH = 100
+WINDOW_WIDTH = 25
 WINDOW_HEIGHT = 50
 MIN_LANE_POINTS = 5
 OFFSET_THRESHOLD = 20
@@ -15,7 +15,7 @@ HIST_THRESHOLD = 50  # histogram 高度閾值
 # 車頭三角形參數
 CAR_TRIANGLE_Y = 0.6    # 三角形中心的高度 (0~1, 0=頂部, 1=底部)
 CAR_TRIANGLE_OFFSET = 50  # 左右偏移，單位: 像素
-CAR_TRIANGLE_SIZE = 60   # 正三角形邊長 (固定大小)
+CAR_TRIANGLE_SIZE = 60    # 正三角形邊長 (固定大小)
 
 # ====== 前處理 ======
 def preprocess_frame(frame):
@@ -121,19 +121,19 @@ def sliding_window_lane_detection(binary_warped, car_x_bev, prevLx=[], prevRx=[]
     return lx_pts, rx_pts, mask_copy, prevLx, prevRx, histogram
 
 # ====== 畫車頭正三角形 (固定大小) ======
-def draw_car_triangle(frame):
+def draw_car_triangle(frame, center_x=None, center_y=None):
     h, w = frame.shape[:2]
-    center_x = w // 2 + CAR_TRIANGLE_OFFSET
-    center_y = int(h * CAR_TRIANGLE_Y)
+    if center_x is None:
+        center_x = w // 2 + CAR_TRIANGLE_OFFSET
+    if center_y is None:
+        center_y = int(h * CAR_TRIANGLE_Y)
 
-    # 正三角形高
-    height = int(np.sqrt(3) / 2 * CAR_TRIANGLE_SIZE)
+    height_tri = int(np.sqrt(3)/2 * CAR_TRIANGLE_SIZE)
 
-    # 頂點座標 (等邊三角形，指向上)
     pts = np.array([
-        [center_x, center_y - 2*height//3],                # 頂點
-        [center_x - CAR_TRIANGLE_SIZE//2, center_y + height//3],  # 左下
-        [center_x + CAR_TRIANGLE_SIZE//2, center_y + height//3]   # 右下
+        [center_x, center_y - 2*height_tri//3],
+        [center_x - CAR_TRIANGLE_SIZE//2, center_y + height_tri//3],
+        [center_x + CAR_TRIANGLE_SIZE//2, center_y + height_tri//3]
     ], np.int32).reshape((-1,1,2))
 
     cv2.fillPoly(frame, [pts], (0,255,255))
@@ -161,8 +161,13 @@ def draw_lane_on_full_frame(full_frame, left_pts, right_pts, Minv, crop_offset_y
     return overlay
 
 # ====== 在 Bird Eye 上畫車道線 ======
-def draw_lane_on_bird_eye(bird_eye_color, left_pts, right_pts):
+def draw_lane_on_bird_eye(bird_eye_color, left_pts, right_pts, car_bev_x=None, car_bev_y=None):
     bird_eye_with_lane = bird_eye_color.copy()
+
+    # 先畫車頭三角形在 Bird Eye View 上
+    if car_bev_x is not None and car_bev_y is not None:
+        draw_car_triangle(bird_eye_with_lane, int(car_bev_x), int(car_bev_y))
+    
     if len(left_pts) > 0 and len(right_pts) > 0:
         cv2.polylines(bird_eye_with_lane, [np.int32(left_pts)], False, (0, 255, 0), 5)
         cv2.polylines(bird_eye_with_lane, [np.int32(right_pts)], False, (0, 255, 0), 5)
@@ -171,6 +176,7 @@ def draw_lane_on_bird_eye(bird_eye_color, left_pts, right_pts):
         overlay = bird_eye_with_lane.copy()
         cv2.fillPoly(overlay, [pts], (255, 0, 0))
         bird_eye_with_lane = cv2.addWeighted(overlay, 0.3, bird_eye_with_lane, 0.7, 0)
+    
     return bird_eye_with_lane
 
 # ====== 畫 Histogram ======
@@ -234,45 +240,45 @@ fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter("output_lane_turn_detection.mp4", fourcc, 20.0, (width, height))
 out_bird_eye = cv2.VideoWriter("output_bird_eye_lane.mp4", fourcc, 20.0, (crop_width, crop_height+150))
 
+# ====== 視窗設定 960x540 ======
+cv2.namedWindow("Lane Detection", cv2.WINDOW_NORMAL)
+cv2.resizeWindow("Lane Detection", 960, 540)
+cv2.namedWindow("Bird's Eye View with Lane + Histogram", cv2.WINDOW_NORMAL)
+cv2.resizeWindow("Bird's Eye View with Lane + Histogram", 960, 540)
+cv2.namedWindow("Bird's Eye View Binary", cv2.WINDOW_NORMAL)
+cv2.resizeWindow("Bird's Eye View Binary", 960, 540)
+
 prevLx, prevRx = [], []
 for fname in frame_files:
     full_frame = cv2.imread(os.path.join(frames_dir, fname))
     if full_frame is None:
         continue
 
-    # 做 crop + bird-eye
+    # crop
     frame_crop = full_frame[:crop_height, start_x:end_x]
     bird_eye_frame_color, M, Minv = apply_bird_eye_view(frame_crop)
     processed_frame = preprocess_frame(bird_eye_frame_color)
 
-    # 原圖車頭三角形中心在 crop 中的 x 座標
-    car_center_x_crop = frame_crop.shape[1] // 2 + CAR_TRIANGLE_OFFSET
-    # 轉換到 bird eye
-    pts = np.array([[[car_center_x_crop, int(frame_crop.shape[0]*CAR_TRIANGLE_Y)]]], dtype=np.float32)
-    car_x_bev = cv2.perspectiveTransform(pts, M)[0,0,0]
+    # 原圖車頭三角形中心點 (考慮 crop)
+    car_center_x_crop = (width//2 + CAR_TRIANGLE_OFFSET) - start_x
+    car_center_y_crop = int(frame_crop.shape[0] * CAR_TRIANGLE_Y)
+    pts = np.array([[[car_center_x_crop, car_center_y_crop]]], dtype=np.float32)
+    car_bev = cv2.perspectiveTransform(pts, M)
+    car_bev_x, car_bev_y = car_bev[0,0,0], car_bev[0,0,1]
 
-    lx_pts, rx_pts, mask_copy, prevLx, prevRx, histogram = sliding_window_lane_detection(processed_frame, car_x_bev, prevLx, prevRx)
+    lx_pts, rx_pts, mask_copy, prevLx, prevRx, histogram = sliding_window_lane_detection(processed_frame, car_bev_x, prevLx, prevRx)
 
-    # 畫在完整原圖
+    # 畫在原圖
     frame_with_lane_full = draw_lane_on_full_frame(full_frame.copy(), lx_pts, rx_pts, Minv, 0, start_x)
     frame_with_lane_full = draw_car_triangle(frame_with_lane_full)
 
-    # bird eye 顯示
-    bird_eye_with_lane = draw_lane_on_bird_eye(bird_eye_frame_color.copy(), lx_pts, rx_pts)
+    # Bird Eye View 畫車道線 + 車頭
+    bird_eye_with_lane = draw_lane_on_bird_eye(bird_eye_frame_color.copy(), lx_pts, rx_pts, car_bev_x, car_bev_y)
     bird_eye_with_hist = draw_histogram_on_bird_eye(bird_eye_with_lane, histogram)
 
     turn_status = detect_turn(lx_pts, rx_pts, frame_crop.shape[1])
     cv2.putText(frame_with_lane_full, turn_status, (30,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 3)
     cv2.putText(bird_eye_with_hist, turn_status, (30,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 3)
-
-    cv2.namedWindow("Lane Detection", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Lane Detection", 960, 540)
-
-    cv2.namedWindow("Bird's Eye View with Lane + Histogram", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Bird's Eye View with Lane + Histogram", 960, 540)
-
-    cv2.namedWindow("Bird's Eye View Binary", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Bird's Eye View Binary", 960, 540)
 
     cv2.imshow("Lane Detection", frame_with_lane_full)
     out.write(frame_with_lane_full)
