@@ -265,6 +265,15 @@ for fname in frame_files:
     cv2.putText(frame_with_lane_full, turn_status, (30,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 3)
     cv2.putText(bird_eye_with_hist, turn_status, (30,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,255), 3)
 
+    cv2.namedWindow("Lane Detection", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Lane Detection", 960, 540)
+
+    cv2.namedWindow("Bird's Eye View with Lane + Histogram", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Bird's Eye View with Lane + Histogram", 960, 540)
+
+    cv2.namedWindow("Bird's Eye View Binary", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Bird's Eye View Binary", 960, 540)
+
     cv2.imshow("Lane Detection", frame_with_lane_full)
     out.write(frame_with_lane_full)
 
@@ -272,6 +281,7 @@ for fname in frame_files:
     out_bird_eye.write(bird_eye_with_hist)
 
     cv2.imshow("Bird's Eye View Binary", processed_frame)
+
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
