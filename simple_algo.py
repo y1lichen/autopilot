@@ -10,6 +10,7 @@ WINDOW_WIDTH = 100
 WINDOW_HEIGHT = 50
 MIN_LANE_POINTS = 5
 OFFSET_THRESHOLD = 20
+HIST_THRESHOLD = 50  # histogram 高度閾值
 
 # 車頭三角形參數
 CAR_TRIANGLE_Y = 0.6    # 三角形中心的高度 (0~1, 0=頂部, 1=底部)
@@ -70,17 +71,21 @@ def apply_bird_eye_view(frame):
     return bird_eye, M, Minv
 
 # ====== 滑動窗口追蹤車道線 ======
-def sliding_window_lane_detection(binary_warped, prevLx=[], prevRx=[]):
+def sliding_window_lane_detection(binary_warped, car_x_bev, prevLx=[], prevRx=[]):
     histogram = np.sum(binary_warped[int(binary_warped.shape[0]*0.75):, :], axis=0)
-    midpoint = histogram.shape[0] // 2
-    left_base = np.argmax(histogram[:midpoint])
-    right_base = np.argmax(histogram[midpoint:]) + midpoint
+    # 以車頭三角形 x 座標為中心，往左找到左線基準
+    left_hist = histogram[:int(car_x_bev)]
+    right_hist = histogram[int(car_x_bev):]
+
+    left_base = np.argmax(left_hist) if np.max(left_hist) > HIST_THRESHOLD else int(car_x_bev//2)
+    right_base = np.argmax(right_hist) + int(car_x_bev) if np.max(right_hist) > HIST_THRESHOLD else int((binary_warped.shape[1]+car_x_bev)//2)
 
     lx_pts, rx_pts = [], []
     y = binary_warped.shape[0]
     mask_copy = cv2.cvtColor(binary_warped, cv2.COLOR_GRAY2BGR)
 
     while y > 0:
+        # 左邊
         x_start = max(left_base - WINDOW_WIDTH//2, 0)
         x_end = min(left_base + WINDOW_WIDTH//2, binary_warped.shape[1])
         window_left = binary_warped[y-WINDOW_HEIGHT:y, x_start:x_end]
@@ -93,6 +98,7 @@ def sliding_window_lane_detection(binary_warped, prevLx=[], prevRx=[]):
                 lx_pts.append((left_base, y - WINDOW_HEIGHT//2))
         cv2.rectangle(mask_copy, (x_start, y), (x_end, y-WINDOW_HEIGHT), (0,255,0), 2)
 
+        # 右邊
         x_start = max(right_base - WINDOW_WIDTH//2, 0)
         x_end = min(right_base + WINDOW_WIDTH//2, binary_warped.shape[1])
         window_right = binary_warped[y-WINDOW_HEIGHT:y, x_start:x_end]
@@ -239,7 +245,13 @@ for fname in frame_files:
     bird_eye_frame_color, M, Minv = apply_bird_eye_view(frame_crop)
     processed_frame = preprocess_frame(bird_eye_frame_color)
 
-    lx_pts, rx_pts, mask_copy, prevLx, prevRx, histogram = sliding_window_lane_detection(processed_frame, prevLx, prevRx)
+    # 原圖車頭三角形中心在 crop 中的 x 座標
+    car_center_x_crop = frame_crop.shape[1] // 2 + CAR_TRIANGLE_OFFSET
+    # 轉換到 bird eye
+    pts = np.array([[[car_center_x_crop, int(frame_crop.shape[0]*CAR_TRIANGLE_Y)]]], dtype=np.float32)
+    car_x_bev = cv2.perspectiveTransform(pts, M)[0,0,0]
+
+    lx_pts, rx_pts, mask_copy, prevLx, prevRx, histogram = sliding_window_lane_detection(processed_frame, car_x_bev, prevLx, prevRx)
 
     # 畫在完整原圖
     frame_with_lane_full = draw_lane_on_full_frame(full_frame.copy(), lx_pts, rx_pts, Minv, 0, start_x)
