@@ -19,10 +19,7 @@ CAR_TRIANGLE_SIZE = 60    # 正三角形邊長 (固定大小)
 
 # ====== 前處理 ======
 def preprocess_frame(frame):
-    """
-    對輸入的畫面進行前處理，以更好地辨識車道線。
-    包括色彩空間轉換、遮罩、Sobel邊緣偵測和形態學操作。
-    """
+    """前處理: 色彩空間轉換、遮罩、Sobel邊緣偵測、形態學操作"""
     hls = cv2.cvtColor(frame, cv2.COLOR_BGR2HLS)
     white_mask = cv2.inRange(hls, np.array([0, 120, 0]), np.array([255, 255, 255]))
     yellow_mask = cv2.inRange(hls, np.array([15, 30, 115]), np.array([35, 204, 255]))
@@ -56,7 +53,7 @@ def preprocess_frame(frame):
 
 # ====== Bird's Eye View ======
 def apply_bird_eye_view(frame):
-    """將圖像轉換為鳥瞰圖。"""
+    """將圖像轉換為鳥瞰圖"""
     height, width = frame.shape[:2]
     src = np.float32([
         [width * 0.3, height * 0.7],
@@ -76,27 +73,32 @@ def apply_bird_eye_view(frame):
     return bird_eye, M, Minv
 
 # ====== 滑動窗口追蹤車道線 ======
-def sliding_window_lane_detection(binary_warped, car_x_bev, prevLx=[], prevRx=[]):
+def sliding_window_lane_detection(binary_warped, car_x_bev, prevLx=[], prevRx=[], use_prev_center=False):
     """
     使用滑動視窗在二值化鳥瞰圖上尋找車道線。
-    並在圖像上繪製這些滑動視窗。
+    use_prev_center=True 表示用前一幀車道中心作為 histogram 中心。
     """
     histogram = np.sum(binary_warped[int(binary_warped.shape[0]*0.75):, :], axis=0)
     
-    # 創建一個彩色圖像副本用於繪製
     window_drawing_img = cv2.cvtColor(binary_warped, cv2.COLOR_GRAY2BGR)
 
-    left_hist = histogram[:int(car_x_bev)]
-    right_hist = histogram[int(car_x_bev):]
+    # 決定 histogram 分割中心
+    if use_prev_center and len(prevLx) > 0 and len(prevRx) > 0:
+        center_x = int(np.mean([prevLx[-1][0], prevRx[-1][0]]))
+    else:
+        center_x = int(car_x_bev)
 
-    left_base = np.argmax(left_hist) if np.max(left_hist) > HIST_THRESHOLD else int(car_x_bev//2)
-    right_base = np.argmax(right_hist) + int(car_x_bev) if np.max(right_hist) > HIST_THRESHOLD else int((binary_warped.shape[1]+car_x_bev)//2)
+    left_hist = histogram[:center_x]
+    right_hist = histogram[center_x:]
+
+    left_base = np.argmax(left_hist) if np.max(left_hist) > HIST_THRESHOLD else center_x // 2
+    right_base = np.argmax(right_hist) + center_x if np.max(right_hist) > HIST_THRESHOLD else (binary_warped.shape[1]+center_x)//2
 
     lx_pts, rx_pts = [], []
     y = binary_warped.shape[0]
 
     while y > 0:
-        # 左邊
+        # 左邊滑動視窗
         x_start = max(left_base - WINDOW_WIDTH//2, 0)
         x_end = min(left_base + WINDOW_WIDTH//2, binary_warped.shape[1])
         window_left = binary_warped[y-WINDOW_HEIGHT:y, x_start:x_end]
@@ -109,7 +111,7 @@ def sliding_window_lane_detection(binary_warped, car_x_bev, prevLx=[], prevRx=[]
                 lx_pts.append((left_base, y - WINDOW_HEIGHT//2))
         cv2.rectangle(window_drawing_img, (x_start, y), (x_end, y-WINDOW_HEIGHT), (0,255,0), 2)
 
-        # 右邊
+        # 右邊滑動視窗
         x_start = max(right_base - WINDOW_WIDTH//2, 0)
         x_end = min(right_base + WINDOW_WIDTH//2, binary_warped.shape[1])
         window_right = binary_warped[y-WINDOW_HEIGHT:y, x_start:x_end]
@@ -131,43 +133,34 @@ def sliding_window_lane_detection(binary_warped, car_x_bev, prevLx=[], prevRx=[]
 
     return lx_pts, rx_pts, window_drawing_img, prevLx, prevRx, histogram
 
-# ====== 畫車頭正三角形 (固定大小) ======
+# ====== 畫車頭三角形 ======
 def draw_car_triangle(frame, center_x=None, center_y=None):
-    """在圖像上繪製代表車頭的三角形。"""
     h, w = frame.shape[:2]
     if center_x is None:
         center_x = w // 2 + CAR_TRIANGLE_OFFSET
     if center_y is None:
         center_y = int(h * CAR_TRIANGLE_Y)
-
     height_tri = int(np.sqrt(3)/2 * CAR_TRIANGLE_SIZE)
-
     pts = np.array([
         [center_x, center_y - 2*height_tri//3],
         [center_x - CAR_TRIANGLE_SIZE//2, center_y + height_tri//3],
         [center_x + CAR_TRIANGLE_SIZE//2, center_y + height_tri//3]
     ], np.int32).reshape((-1,1,2))
-
     cv2.fillPoly(frame, [pts], (0,255,255))
     return frame
 
 # ====== 畫車道線到原圖 ======
 def draw_lane_on_full_frame(full_frame, left_pts, right_pts, Minv, crop_offset_y, crop_offset_x):
-    """將檢測到的車道線從鳥瞰圖轉換並繪製到原始圖像上。"""
     overlay = full_frame.copy()
     if len(left_pts) > 0 and len(right_pts) > 0:
         left = np.array(left_pts, dtype=np.float32).reshape(-1,1,2)
         right = np.array(right_pts, dtype=np.float32).reshape(-1,1,2)
-
         left_unwarp = cv2.perspectiveTransform(left, Minv)
         right_unwarp = cv2.perspectiveTransform(right, Minv)
-
         left_unwarp[:,:,0] += crop_offset_x
         right_unwarp[:,:,0] += crop_offset_x
-
         cv2.polylines(overlay, [np.int32(left_unwarp)], False, (0,255,0), 5)
         cv2.polylines(overlay, [np.int32(right_unwarp)], False, (0,255,0), 5)
-
         pts = np.vstack((left_unwarp, right_unwarp[::-1]))
         cv2.fillPoly(overlay, [np.int32(pts)], (255,0,0))
         overlay = cv2.addWeighted(overlay, 0.3, full_frame, 0.7, 0)
@@ -175,27 +168,20 @@ def draw_lane_on_full_frame(full_frame, left_pts, right_pts, Minv, crop_offset_y
 
 # ====== 在 Bird Eye 上畫車道線 ======
 def draw_lane_on_bird_eye(bird_eye_color, left_pts, right_pts, car_bev_x=None, car_bev_y=None):
-    """在鳥瞰圖上繪製車道線和車頭三角形。"""
     bird_eye_with_lane = bird_eye_color.copy()
-
-    # 先畫車頭三角形在 Bird Eye View 上
     if car_bev_x is not None and car_bev_y is not None:
         draw_car_triangle(bird_eye_with_lane, int(car_bev_x), int(car_bev_y))
-    
     if len(left_pts) > 0 and len(right_pts) > 0:
         cv2.polylines(bird_eye_with_lane, [np.int32(left_pts)], False, (0, 255, 0), 5)
         cv2.polylines(bird_eye_with_lane, [np.int32(right_pts)], False, (0, 255, 0), 5)
-
         pts = np.vstack((np.int32(left_pts), np.int32(right_pts[::-1])))
         overlay = bird_eye_with_lane.copy()
         cv2.fillPoly(overlay, [pts], (255, 0, 0))
         bird_eye_with_lane = cv2.addWeighted(overlay, 0.3, bird_eye_with_lane, 0.7, 0)
-    
     return bird_eye_with_lane
 
 # ====== 畫 Histogram ======
 def draw_histogram_on_bird_eye(bird_eye_color, histogram):
-    """將直方圖繪製在鳥瞰圖下方。"""
     height, width = bird_eye_color.shape[:2]
     hist_img = np.zeros((150, width, 3), dtype=np.uint8)
     if np.max(histogram) > 0:
@@ -209,7 +195,6 @@ def draw_histogram_on_bird_eye(bird_eye_color, histogram):
 
 # ====== 判斷方向 ======
 def detect_turn(left_pts, right_pts, frame_width):
-    """根據車道線的形狀和位置判斷行駛方向。"""
     if len(left_pts) < MIN_LANE_POINTS or len(right_pts) < MIN_LANE_POINTS:
         return "detecting"
     left_fit = np.polyfit([p[1] for p in left_pts], [p[0] for p in left_pts], 2)
@@ -233,10 +218,8 @@ def detect_turn(left_pts, right_pts, frame_width):
             turn = "adjust right"
         else:
             turn = "keep straight"
-    elif curve in ["turn left", "turn right"]:
-        turn = curve
     else:
-        turn = "detecting"
+        turn = curve
     return turn
 
 # ====== Main ======
@@ -256,12 +239,10 @@ fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter("output_lane_turn_detection.mp4", fourcc, 20.0, (width, height))
 out_bird_eye = cv2.VideoWriter("output_bird_eye_lane.mp4", fourcc, 20.0, (crop_width, crop_height+150))
 
-# ====== 視窗設定 960x540 ======
 cv2.namedWindow("Lane Detection", cv2.WINDOW_NORMAL)
 cv2.resizeWindow("Lane Detection", 960, 540)
 cv2.namedWindow("Bird's Eye View with Lane + Histogram", cv2.WINDOW_NORMAL)
 cv2.resizeWindow("Bird's Eye View with Lane + Histogram", 960, 540)
-# 這個視窗將顯示帶有滑動視窗矩形的黑白鳥瞰圖
 cv2.namedWindow("Bird's Eye View with Sliding Windows", cv2.WINDOW_NORMAL)
 cv2.resizeWindow("Bird's Eye View with Sliding Windows", 960, 540)
 
@@ -283,8 +264,11 @@ for fname in frame_files:
     car_bev = cv2.perspectiveTransform(pts, M)
     car_bev_x, car_bev_y = car_bev[0,0,0], car_bev[0,0,1]
 
-    # 這裡的 window_drawing_img 就是你要求的回傳圖片
-    lx_pts, rx_pts, window_drawing_img, prevLx, prevRx, histogram = sliding_window_lane_detection(processed_frame, car_bev_x, prevLx, prevRx)
+    # use_prev_center=True 表示使用上一幀車道中心作為 histogram 中心
+    use_prev_center = True if prevLx and prevRx else False
+    lx_pts, rx_pts, window_drawing_img, prevLx, prevRx, histogram = sliding_window_lane_detection(
+        processed_frame, car_bev_x, prevLx, prevRx, use_prev_center=use_prev_center
+    )
 
     # 畫在原圖
     frame_with_lane_full = draw_lane_on_full_frame(full_frame.copy(), lx_pts, rx_pts, Minv, 0, start_x)
@@ -304,7 +288,6 @@ for fname in frame_files:
     cv2.imshow("Bird's Eye View with Lane + Histogram", bird_eye_with_hist)
     out_bird_eye.write(bird_eye_with_hist)
 
-    # 顯示帶有滑動視窗的鳥瞰圖
     cv2.imshow("Bird's Eye View with Sliding Windows", window_drawing_img)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
