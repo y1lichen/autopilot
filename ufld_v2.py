@@ -10,19 +10,19 @@ import onnxruntime as ort
 # --- 自定義裁切比例設定 (作為原始圖片的比例) ---
 # 左 0.35, 右 0.2, 上 0.2, 下 0.4
 CROP_CONFIG = {
-    "left_cut": 0.35,
-    "right_cut": 0.20,
-    "top_cut": 0.20,
-    "bottom_cut": 0.40
+    "left_cut": 0.00,
+    "right_cut": 0.00,
+    "top_cut": 0.00,
+    "bottom_cut": 0.4
 }
 # ------------------------------------------------
 
 frames_dir = "dataset/run_1756133797/frames"
 frame_files = sorted([f for f in os.listdir(frames_dir) if f.endswith(".jpg") or f.endswith(".png")])
 
-model_path = "/Users/chen/Downloads/resources/ufldv2_culane_res18_320x1600.onnx"
+model_path = "/Users/chen/Downloads/resources/ufldv2_culane_res34_320x1600.onnx"
 # model_path = "/Users/chen/Downloads/resources/ufldv2_curvelanes_res18_800x1600.onnx"
-inpHeight, inpWidth = 800, 1600
+inpHeight, inpWidth = 320, 1600
 
 # =====================
 # OnnxRuntime Session
