@@ -23,7 +23,7 @@ frames_dir = "dataset/run_1756133797/frames"
 frame_files = sorted([f for f in os.listdir(frames_dir) if f.endswith(".jpg") or f.endswith(".png")])
 
 # 替換成您的 ONNX 模型路徑
-model_path = "/home/chen/Downloads/resources/ufldv2_culane_res34_320x1600.onnx"
+model_path = "/Users/chen/Downloads/resources/ufldv2_culane_res34_320x1600.onnx"
 inpHeight, inpWidth = 320, 1600
 
 # =====================
