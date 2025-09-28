@@ -1,4 +1,5 @@
 import os
+import sys
 import cv2
 import time
 import numpy as np
@@ -22,7 +23,7 @@ frames_dir = "dataset/run_1756133797/frames"
 frame_files = sorted([f for f in os.listdir(frames_dir) if f.endswith(".jpg") or f.endswith(".png")])
 
 # 替換成您的 ONNX 模型路徑
-model_path = "/Users/chen/Downloads/resources/ufldv2_culane_res34_320x1600.onnx"
+model_path = "/home/chen/Downloads/resources/ufldv2_culane_res34_320x1600.onnx"
 inpHeight, inpWidth = 320, 1600
 
 # =====================
@@ -30,9 +31,13 @@ inpHeight, inpWidth = 320, 1600
 # =====================
 session_options = ort.SessionOptions()
 session_options.log_severity_level = 2
-providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
-session = ort.InferenceSession(model_path, sess_options=session_options, providers=providers)
 
+if sys.platform == "darwin":
+    providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+else:
+    providers = ["OpenVINOExecutionProvider", "CPUExecutionProvider"]
+session = ort.InferenceSession(model_path, sess_options=session_options, providers=providers)
+print("Session providers:", session.get_providers())
 # =====================
 # UFLDv2/CULane 設定
 # =====================
