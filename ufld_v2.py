@@ -53,6 +53,7 @@ STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(1, 1, 3)
 row_anchor = [(0.42 + i * (1.0 - 0.42) / (num_row - 1)) for i in range(num_row)]
 col_anchor = [(0.0 + i * (1.0 - 0.0) / (num_col - 1)) for i in range(num_col)]
 
+car_center_offset = 30
 # =====================
 # Common functions
 # =====================
@@ -183,6 +184,7 @@ for frame_name in frame_files:
     # 車道中心 & 偏移量 (改成中間高度平均)
     # =====================
     car_center = W_orig // 2
+    car_center = car_center + car_center_offset
     if line_list[1] and line_list[2]:
         left_lane_x = np.mean([p[0] for p in line_list[1]])
         right_lane_x = np.mean([p[0] for p in line_list[2]])
@@ -196,7 +198,7 @@ for frame_name in frame_files:
 
         # 自動閾值
         lane_width = right_lane_x - left_lane_x
-        threshold = max(int(lane_width * 0.15), 20)  # 至少10px
+        threshold = max(int(lane_width * 0.15), 20)  # 至少20px
 
         if abs(offset) < threshold:
             steer_cmd = "Keep Straight"
