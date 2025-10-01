@@ -6,4 +6,5 @@
 /out_curve
 /out_frames
 *.pyc
-*.mp4
+*.pt
+*.onnx
